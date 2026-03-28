@@ -1,6 +1,7 @@
 'use strict';
 
 const { connect, disconnect, getConnections } = require('./connector');
+const store = require('./store');
 
 /**
  * Create API router
@@ -64,6 +65,7 @@ function createRouter(ctx) {
         const source = getSourceIndex()[name];
         if (!source) return send(404, { ok: false, error: 'Asset not found' });
         const result = connect(source.filePath, tool, type, name, projectRoot, source.raw);
+        if (result.ok) store.recordAction('connect', name, { tool, type, method: result.method });
         return send(result.ok ? 200 : 400, result);
       });
     }
@@ -74,6 +76,7 @@ function createRouter(ctx) {
         if (!body) return send(400, { ok: false, error: 'Invalid JSON' });
         const { name, tool, type } = body;
         const result = disconnect(tool, type, name, projectRoot);
+        if (result.ok) store.recordAction('disconnect', name, { tool, type });
         return send(result.ok ? 200 : 400, result);
       });
     }
@@ -89,40 +92,38 @@ function createRouter(ctx) {
       return send(200, connections);
     }
 
-    // GET /api/providers — list installed providers with asset counts
+    // GET /api/providers — from store
     if (url.pathname === '/api/providers' && req.method === 'GET') {
-      const assets = getData();
-      const providers = {};
-      for (const a of assets) {
-        for (const p of (a.providers || [])) {
-          if (!providers[p]) providers[p] = { name: p, count: 0, types: {} };
-          providers[p].count++;
-          providers[p].types[a.type] = (providers[p].types[a.type] || 0) + 1;
-        }
-      }
-      return send(200, { ok: true, data: Object.values(providers) });
+      return send(200, { ok: true, data: store.getProviderStats() });
     }
 
-    // GET /api/categories — list categories with counts
+    // GET /api/categories — from store
     if (url.pathname === '/api/categories' && req.method === 'GET') {
-      const assets = getData();
       const cats = {};
-      for (const a of assets) {
-        if (!cats[a.cat]) cats[a.cat] = 0;
-        cats[a.cat]++;
-      }
+      for (const row of store.getCategories()) cats[row.category] = row.count;
       return send(200, { ok: true, data: cats });
     }
 
     // GET /api/stats — summary stats
     if (url.pathname === '/api/stats' && req.method === 'GET') {
-      const assets = getData();
-      const stats = { total: assets.length, skill: 0, agent: 0, mcp: 0, instruction: 0, rule: 0, orchestrator: 0 };
-      for (const a of assets) {
-        if (stats[a.type] !== undefined) stats[a.type]++;
-        if (a.isOrchestrator) stats.orchestrator++;
-      }
-      return send(200, { ok: true, data: stats });
+      return send(200, { ok: true, data: store.getStats() });
+    }
+
+    // GET /api/environments
+    if (url.pathname === '/api/environments' && req.method === 'GET') {
+      return send(200, { ok: true, data: store.getEnvironments() });
+    }
+
+    // GET /api/history
+    if (url.pathname === '/api/history' && req.method === 'GET') {
+      const limit = parseInt(url.searchParams.get('limit')) || 50;
+      return send(200, { ok: true, data: store.getHistory(limit) });
+    }
+
+    // POST /api/undo
+    if (url.pathname === '/api/undo' && req.method === 'POST') {
+      const result = store.undoLast();
+      return send(result.ok ? 200 : 400, result);
     }
 
     // POST /api/rescan

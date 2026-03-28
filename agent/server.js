@@ -14,11 +14,18 @@ const { createWatcher } = require('./watcher');
 async function startServer(opts) {
   const { port = 3000, claudeDir, projectRoot, headless = false } = opts;
 
-  // Initial scan
+  // Initialize store
+  const store = require('./store');
+  store.initStore();
+
+  // Initial scan → categorize → persist to SQLite
   const { scanner } = require('./scanner');
   const { categorize } = require('./categorizer');
   const raw = scanner(claudeDir);
   let data = categorize(raw);
+  store.upsertAssets(data, store.getLocalEnvironmentId());
+
+  console.log(`  Persisted ${data.length} assets to ${store.DB_PATH}`);
 
   // Build source index for connector
   const sourceIndex = {};
@@ -38,6 +45,7 @@ async function startServer(opts) {
     const newRaw = scanner(claudeDir);
     data = categorize(newRaw);
     rebuildIndex(newRaw);
+    store.upsertAssets(data, store.getLocalEnvironmentId());
     broadcast({ type: 'assets:updated', count: data.length });
     return data;
   }

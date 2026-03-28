@@ -41,5 +41,8 @@
     "agent/",
     "template/",
     "ui/dist/"
-  ]
+  ],
+  "dependencies": {
+    "better-sqlite3": "^12.8.0"
+  }
 }
