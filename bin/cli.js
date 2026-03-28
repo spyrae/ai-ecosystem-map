@@ -131,10 +131,13 @@ function main() {
     const { connect, disconnect, getConnections } = require('../src/connector');
     const projectRoot = process.cwd();
 
-    // Build source path index from raw scan
+    // Build source index from raw scan (skills, agents, mcp, instructions, rules)
     const sourceIndex = {};
     for (const item of [...raw.skills, ...raw.agents, ...(raw.instructions || []), ...(raw.rules || [])]) {
       if (item.filePath) sourceIndex[item.name] = item;
+    }
+    for (const item of raw.mcpServers) {
+      sourceIndex[item.name] = item;
     }
 
     const server = http.createServer((req, res) => {
@@ -159,7 +162,7 @@ function main() {
               res.end(JSON.stringify({ ok: false, error: 'Item not found' }));
               return;
             }
-            const result = connect(source.filePath, tool, type, name, projectRoot);
+            const result = connect(source.filePath, tool, type, name, projectRoot, source.raw);
             res.writeHead(result.ok ? 200 : 400, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(result));
           } catch (e) {
