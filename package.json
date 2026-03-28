@@ -1,0 +1,37 @@
+{
+  "name": "claude-ecosystem-map",
+  "version": "1.0.0",
+  "description": "Interactive visual map of your Claude Code ecosystem: skills, agents, MCP servers — auto-discovered from your local .claude/ config",
+  "main": "bin/cli.js",
+  "bin": {
+    "claude-ecosystem-map": "bin/cli.js",
+    "cem": "bin/cli.js"
+  },
+  "scripts": {
+    "start": "node bin/cli.js"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "skills",
+    "agents",
+    "mcp",
+    "visualization",
+    "ecosystem",
+    "cli"
+  ],
+  "author": "Roman Belov",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rbelov/claude-ecosystem-map"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "template/"
+  ]
+}

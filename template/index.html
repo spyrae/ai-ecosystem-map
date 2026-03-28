@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Code Ecosystem Map</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --surface2: #1c2333;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-muted: #8b949e;
+    --accent: #58a6ff;
+    --accent2: #3fb950;
+    --accent3: #d2a8ff;
+    --accent4: #f0883e;
+    --accent5: #f778ba;
+    --accent6: #79c0ff;
+    --red: #f85149;
+    --tag-bg: rgba(88,166,255,0.12);
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+  .search-container { position: sticky; top: 0; z-index: 100; background: var(--bg); border-bottom: 1px solid var(--border); padding: 16px 24px; }
+  .search-wrapper { max-width: 800px; margin: 0 auto; position: relative; }
+  .search-wrapper input { width: 100%; padding: 14px 20px 14px 48px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; color: var(--text); font-size: 16px; outline: none; transition: border-color .2s; }
+  .search-wrapper input:focus { border-color: var(--accent); }
+  .search-wrapper input::placeholder { color: var(--text-muted); }
+  .search-icon { position: absolute; left: 16px; top: 50%; transform: translateY(-50%); color: var(--text-muted); font-size: 18px; }
+  .search-results { position: absolute; top: 100%; left: 0; right: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; margin-top: 8px; max-height: 400px; overflow-y: auto; display: none; box-shadow: 0 8px 32px rgba(0,0,0,.4); }
+  .search-results.active { display: block; }
+  .search-result-item { padding: 12px 20px; cursor: pointer; border-bottom: 1px solid var(--border); transition: background .15s; }
+  .search-result-item:hover { background: var(--surface2); }
+  .search-result-item:last-child { border-bottom: none; }
+  .sr-name { font-weight: 600; color: var(--accent); font-size: 14px; }
+  .sr-type { font-size: 11px; padding: 2px 8px; border-radius: 6px; margin-left: 8px; font-weight: 500; }
+  .sr-desc { color: var(--text-muted); font-size: 13px; margin-top: 4px; line-height: 1.4; }
+  .sr-no-match { padding: 20px; text-align: center; color: var(--text-muted); }
+  .sr-no-match strong { color: var(--accent4); display: block; margin-top: 8px; font-size: 14px; }
+
+  .header { text-align: center; padding: 32px 24px 16px; }
+  .header h1 { font-size: 28px; font-weight: 700; background: linear-gradient(135deg, var(--accent), var(--accent3)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .header p { color: var(--text-muted); margin-top: 8px; font-size: 14px; }
+
+  .stats { display: flex; justify-content: center; gap: 32px; padding: 0 24px 24px; flex-wrap: wrap; }
+  .stat { text-align: center; }
+  .stat-num { font-size: 32px; font-weight: 700; }
+  .stat-label { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; margin-top: 4px; }
+
+  .filters { display: flex; justify-content: center; gap: 8px; padding: 0 24px 16px; flex-wrap: wrap; }
+  .filter-btn { padding: 8px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text-muted); cursor: pointer; font-size: 13px; transition: all .2s; }
+  .filter-btn:hover, .filter-btn.active { border-color: var(--accent); color: var(--accent); background: var(--tag-bg); }
+
+  .anchor-nav { display: flex; justify-content: center; gap: 6px; padding: 0 24px 24px; flex-wrap: wrap; }
+  .anchor-link { padding: 5px 12px; border-radius: 6px; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 12px; transition: all .2s; border: none; text-decoration: none; }
+  .anchor-link:hover { color: var(--text); background: var(--surface); }
+
+  .categories { max-width: 1400px; margin: 0 auto; padding: 0 24px 48px; }
+  .category { margin-bottom: 32px; }
+  .category-header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; cursor: pointer; user-select: none; }
+  .category-header h2 { font-size: 18px; font-weight: 600; }
+  .category-count { font-size: 13px; color: var(--text-muted); background: var(--surface); padding: 2px 10px; border-radius: 12px; }
+  .category-toggle { color: var(--text-muted); transition: transform .2s; }
+  .category.collapsed .category-toggle { transform: rotate(-90deg); }
+  .category.collapsed .cards { display: none; }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; transition: all .2s; cursor: default; position: relative; }
+  .card:hover { border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 4px 20px rgba(88,166,255,.08); }
+  .card.orchestrator { border-left: 3px solid var(--accent3); }
+  .card.highlight { border-color: var(--accent); background: rgba(88,166,255,.06); }
+  .card-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .card-name { font-weight: 600; font-size: 14px; color: var(--accent); font-family: 'SF Mono', 'Fira Code', monospace; }
+  .card-badge { font-size: 10px; padding: 2px 8px; border-radius: 6px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; }
+  .badge-skill { background: rgba(63,185,80,.15); color: var(--accent2); }
+  .badge-agent { background: rgba(210,168,255,.15); color: var(--accent3); }
+  .badge-mcp { background: rgba(240,136,62,.15); color: var(--accent4); }
+  .badge-gsd { background: rgba(121,192,255,.15); color: var(--accent6); }
+  .badge-orchestrator { background: rgba(247,120,186,.15); color: var(--accent5); }
+  .card-desc { font-size: 13px; color: var(--text-muted); line-height: 1.5; margin-bottom: 10px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .card-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+  .tag { font-size: 11px; padding: 2px 8px; border-radius: 6px; background: var(--tag-bg); color: var(--accent); }
+  .card-deps { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+  .card-deps-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 6px; }
+  .dep-link { font-size: 12px; color: var(--accent3); cursor: pointer; margin-right: 8px; font-family: 'SF Mono', 'Fira Code', monospace; }
+  .dep-link:hover { text-decoration: underline; }
+  .card-used-by { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+  .card-used-by .card-deps-label { color: var(--accent5); }
+  .used-by-link { font-size: 12px; color: var(--accent5); cursor: pointer; margin-right: 8px; font-family: 'SF Mono', 'Fira Code', monospace; }
+  .used-by-link:hover { text-decoration: underline; }
+
+  .footer { text-align: center; padding: 24px; border-top: 1px solid var(--border); color: var(--text-muted); font-size: 12px; }
+  .footer a { color: var(--accent); text-decoration: none; }
+  .footer a:hover { text-decoration: underline; }
+
+  ::-webkit-scrollbar { width: 8px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+</style>
+</head>
+<body>
+
+<div class="search-container">
+  <div class="search-wrapper">
+    <span class="search-icon">&#x1F50D;</span>
+    <input type="text" id="searchInput" placeholder="What do you need? e.g. 'deploy app', 'write article', 'debug flutter'..." autocomplete="off">
+    <div class="search-results" id="searchResults"></div>
+  </div>
+</div>
+
+<div class="header">
+  <h1>Code Ecosystem</h1>
+  <p>Skills, Agents, MCP Servers &mdash; auto-discovered from .claude/</p>
+</div>
+
+<div class="stats">
+  <div class="stat"><div class="stat-num" style="color:var(--accent2)" id="statSkills">0</div><div class="stat-label">Skills</div></div>
+  <div class="stat"><div class="stat-num" style="color:var(--accent3)" id="statAgents">0</div><div class="stat-label">Agents</div></div>
+  <div class="stat"><div class="stat-num" style="color:var(--accent4)" id="statMcp">0</div><div class="stat-label">MCP Servers</div></div>
+</div>
+
+<div class="filters">
+  <button class="filter-btn active" data-filter="all">All</button>
+  <button class="filter-btn" data-filter="skill">Skills</button>
+  <button class="filter-btn" data-filter="agent">Agents</button>
+  <button class="filter-btn" data-filter="mcp">MCP Servers</button>
+  <button class="filter-btn" data-filter="orchestrator">Orchestrators</button>
+</div>
+
+<div class="anchor-nav" id="anchorNav"></div>
+
+<div class="categories" id="categoriesContainer"></div>
+
+<div class="footer">
+  Generated by <a href="https://github.com/rbelov/claude-ecosystem-map" target="_blank">claude-ecosystem-map</a>
+</div>
+
+<script>
+// Data injected by generator
+/*__DATA_PLACEHOLDER__*/
+
+const CAT_ORDER = ["Orchestrators","Project Management","Development","Code Quality","Security & QA","DevOps & Infra","Content & Writing","SEO & GEO","UX & Design","Research & Intel","GSD System","Agents","MCP Servers","Other"];
+const CAT_COLORS = {"Orchestrators":"#f778ba","Project Management":"#58a6ff","Development":"#3fb950","Code Quality":"#79c0ff","Security & QA":"#f85149","DevOps & Infra":"#f0883e","Content & Writing":"#e0c285","SEO & GEO":"#7ee787","UX & Design":"#d2a8ff","Research & Intel":"#79c0ff","GSD System":"#79c0ff","Agents":"#d2a8ff","MCP Servers":"#f0883e","Other":"#8b949e"};
+
+// Build reverse deps
+const USED_BY = {};
+DATA.forEach(d => {
+  if (d.deps) d.deps.forEach(dep => {
+    if (!USED_BY[dep]) USED_BY[dep] = [];
+    if (!USED_BY[dep].includes(d.name)) USED_BY[dep].push(d.name);
+  });
+});
+
+function catSlug(cat) { return cat.toLowerCase().replace(/[^a-z0-9]+/g, '-'); }
+
+function render(filter) {
+  filter = filter || 'all';
+  const container = document.getElementById('categoriesContainer');
+  container.innerHTML = '';
+
+  let counts = { skill: 0, agent: 0, mcp: 0 };
+  DATA.forEach(d => { if (counts[d.type] !== undefined) counts[d.type]++; });
+  document.getElementById('statSkills').textContent = counts.skill;
+  document.getElementById('statAgents').textContent = counts.agent;
+  document.getElementById('statMcp').textContent = counts.mcp;
+
+  const filtered = filter === 'all' ? DATA :
+    filter === 'orchestrator' ? DATA.filter(d => d.isOrchestrator) :
+    DATA.filter(d => d.type === filter);
+
+  const grouped = {};
+  filtered.forEach(d => {
+    if (!grouped[d.cat]) grouped[d.cat] = [];
+    grouped[d.cat].push(d);
+  });
+
+  // Anchor nav
+  const anchorNav = document.getElementById('anchorNav');
+  const visibleCats = CAT_ORDER.filter(cat => grouped[cat]);
+  anchorNav.innerHTML = visibleCats.map(cat =>
+    '<a class="anchor-link" href="#cat-' + catSlug(cat) + '" onclick="scrollToCat(event, \'' + catSlug(cat) + '\')" style="color:' + (CAT_COLORS[cat] || '#8b949e') + '">' + cat + '</a>'
+  ).join('');
+
+  CAT_ORDER.forEach(cat => {
+    if (!grouped[cat]) return;
+    const items = grouped[cat];
+    const section = document.createElement('div');
+    section.className = 'category';
+    section.id = 'cat-' + catSlug(cat);
+    section.innerHTML =
+      '<div class="category-header" onclick="this.parentElement.classList.toggle(\'collapsed\')">' +
+        '<span class="category-toggle">&#9660;</span>' +
+        '<h2 style="color:' + (CAT_COLORS[cat] || '#e6edf3') + '">' + cat + '</h2>' +
+        '<span class="category-count">' + items.length + '</span>' +
+      '</div>' +
+      '<div class="cards">' + items.map(renderCard).join('') + '</div>';
+    container.appendChild(section);
+  });
+}
+
+function renderCard(d) {
+  var bc = d.isOrchestrator ? 'badge-orchestrator' : d.type === 'agent' ? 'badge-agent' : d.type === 'mcp' ? 'badge-mcp' : d.type === 'gsd' ? 'badge-gsd' : 'badge-skill';
+  var bl = d.isOrchestrator ? 'orchestrator' : d.type;
+  var cc = d.isOrchestrator ? 'card orchestrator' : 'card';
+
+  var depsHtml = d.deps && d.deps.length ?
+    '<div class="card-deps"><div class="card-deps-label">Uses</div>' +
+    d.deps.map(function(dep) { return '<span class="dep-link" onclick="highlightCard(\'' + dep + '\')">' + dep + '</span>'; }).join('') +
+    '</div>' : '';
+
+  var usedBy = USED_BY[d.name] || [];
+  var usedByHtml = usedBy.length ?
+    '<div class="card-used-by"><div class="card-deps-label">Used by</div>' +
+    usedBy.map(function(u) { return '<span class="used-by-link" onclick="highlightCard(\'' + u + '\')">' + u + '</span>'; }).join('') +
+    '</div>' : '';
+
+  return '<div class="' + cc + '" id="card-' + d.name + '" data-name="' + d.name + '">' +
+    '<div class="card-top">' +
+      '<span class="card-name">/' + d.name + '</span>' +
+      '<span class="card-badge ' + bc + '">' + bl + '</span>' +
+    '</div>' +
+    '<div class="card-desc">' + (d.desc || '') + '</div>' +
+    '<div class="card-tags">' + (d.tags || []).map(function(t) { return '<span class="tag">' + t + '</span>'; }).join('') + '</div>' +
+    depsHtml + usedByHtml +
+  '</div>';
+}
+
+function scrollToCat(e, slug) {
+  e.preventDefault();
+  var el = document.getElementById('cat-' + slug);
+  if (el) { el.classList.remove('collapsed'); el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+}
+
+function highlightCard(name) {
+  document.querySelectorAll('.card.highlight').forEach(function(el) { el.classList.remove('highlight'); });
+  document.querySelectorAll('.category.collapsed').forEach(function(el) { el.classList.remove('collapsed'); });
+  var card = document.getElementById('card-' + name);
+  if (card) {
+    card.classList.add('highlight');
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setTimeout(function() { card.classList.remove('highlight'); }, 3000);
+  }
+}
+
+// Filters
+document.querySelectorAll('.filter-btn').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    document.querySelectorAll('.filter-btn').forEach(function(b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    render(btn.dataset.filter);
+  });
+});
+
+// Search
+var searchInput = document.getElementById('searchInput');
+var searchResults = document.getElementById('searchResults');
+
+searchInput.addEventListener('input', function() {
+  var q = searchInput.value.toLowerCase().trim();
+  if (!q) { searchResults.classList.remove('active'); return; }
+
+  var scored = DATA.map(function(d) {
+    var score = 0;
+    var words = q.split(/\s+/);
+    words.forEach(function(w) {
+      if (d.name.toLowerCase().indexOf(w) !== -1) score += 10;
+      if (d.keywords && d.keywords.indexOf(w) !== -1) score += 5;
+      if (d.desc && d.desc.toLowerCase().indexOf(w) !== -1) score += 3;
+      if (d.tags && d.tags.some(function(t) { return t.indexOf(w) !== -1; })) score += 4;
+    });
+    return { name: d.name, type: d.type, desc: d.desc, isOrchestrator: d.isOrchestrator, score: score };
+  }).filter(function(d) { return d.score > 0; }).sort(function(a, b) { return b.score - a.score; }).slice(0, 8);
+
+  if (scored.length === 0) {
+    searchResults.innerHTML = '<div class="sr-no-match">No matching tool found for "' + searchInput.value + '"<strong>Consider creating a new skill</strong></div>';
+  } else {
+    searchResults.innerHTML = scored.map(function(d) {
+      var bc = d.isOrchestrator ? 'badge-orchestrator' : d.type === 'agent' ? 'badge-agent' : d.type === 'mcp' ? 'badge-mcp' : 'badge-skill';
+      var desc = (d.desc || '').substring(0, 120);
+      return '<div class="search-result-item" onclick="selectResult(\'' + d.name + '\')">' +
+        '<span class="sr-name">/' + d.name + '</span><span class="sr-type ' + bc + '">' + (d.isOrchestrator ? 'orchestrator' : d.type) + '</span>' +
+        '<div class="sr-desc">' + desc + (desc.length >= 120 ? '...' : '') + '</div></div>';
+    }).join('');
+  }
+  searchResults.classList.add('active');
+});
+
+searchInput.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') { searchResults.classList.remove('active'); searchInput.blur(); }
+});
+
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('.search-wrapper')) searchResults.classList.remove('active');
+});
+
+function selectResult(name) {
+  searchResults.classList.remove('active');
+  searchInput.value = '';
+  document.querySelectorAll('.filter-btn').forEach(function(b) { b.classList.remove('active'); });
+  document.querySelector('[data-filter="all"]').classList.add('active');
+  render('all');
+  setTimeout(function() { highlightCard(name); }, 100);
+}
+
+render();
+</script>
+</body>
+</html>
