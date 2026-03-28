@@ -8,7 +8,9 @@
     "aem": "bin/cli.js"
   },
   "scripts": {
-    "start": "node bin/cli.js"
+    "start": "node bin/cli.js",
+    "scan": "node bin/cli.js scan",
+    "dev": "node bin/cli.js --no-open"
   },
   "keywords": [
     "claude",
@@ -36,7 +38,8 @@
   },
   "files": [
     "bin/",
-    "src/",
-    "template/"
+    "agent/",
+    "template/",
+    "ui/dist/"
   ]
 }

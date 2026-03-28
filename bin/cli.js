@@ -4,36 +4,34 @@
 
 const path = require('path');
 const fs = require('fs');
-const { scanner } = require('../src/scanner');
-const { categorize } = require('../src/categorizer');
-const { generateHtml } = require('../src/generator');
 
 const VERSION = require('../package.json').version;
-
-// Cross-platform home directory
 const HOME = process.env.HOME || process.env.USERPROFILE || '';
 
 function parseArgs(args) {
   const opts = {
+    command: null,     // null = agent mode, 'scan' = one-shot
     claudeDir: null,
     output: null,
-    serve: null,
+    port: 3000,
     open: true,
+    headless: false,
     help: false,
     version: false,
   };
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (arg === '--help' || arg === '-h') opts.help = true;
+    if (arg === 'scan') opts.command = 'scan';
+    else if (arg === '--help' || arg === '-h') opts.help = true;
     else if (arg === '--version' || arg === '-v') opts.version = true;
     else if (arg === '--no-open') opts.open = false;
+    else if (arg === '--headless') { opts.headless = true; opts.open = false; }
     else if (arg === '--dir' || arg === '-d') opts.claudeDir = args[++i];
     else if (arg === '--output' || arg === '-o') opts.output = args[++i];
-    else if (arg === '--serve' || arg === '-s') {
-      opts.serve = parseInt(args[++i], 10) || 3000;
-      opts.open = true;
-    }
+    else if (arg === '--port' || arg === '-p') opts.port = parseInt(args[++i], 10) || 3000;
+    // Legacy compat: -s <port> = agent mode with port
+    else if (arg === '--serve' || arg === '-s') opts.port = parseInt(args[++i], 10) || 3000;
   }
 
   return opts;
@@ -43,61 +41,58 @@ function printHelp() {
   console.log(`
   ai-ecosystem-map v${VERSION}
 
-  Generates an interactive visual map of your AI coding ecosystem.
-  Auto-discovers skills, agents, MCP servers, rules, and instructions
-  from Claude, Codex, Gemini, Cursor, Windsurf, Copilot, and Continue.
+  Visual control plane for your AI coding ecosystem.
+  Auto-discovers skills, agents, MCP servers from Claude, Codex,
+  Gemini, Cursor, Windsurf, Copilot, and Continue.
 
   Usage:
-    aem [options]
-    ai-ecosystem-map [options]
-    npx ai-ecosystem-map [options]
+    aem [options]              Start agent with web UI
+    aem scan [options]         One-shot scan (no server)
 
-  Options:
-    -d, --dir <path>     Path to .claude/ directory (default: ~/.claude/)
-    -o, --output <path>  Save HTML to file (default: opens temp file)
-    -s, --serve <port>   Start local server on port (default: 3000)
-    --no-open            Don't auto-open browser
-    -v, --version        Show version
-    -h, --help           Show this help
+  Agent mode (default):
+    aem                        Start on port 3000, open browser
+    aem -p 8080                Custom port
+    aem --headless             API only, no UI (for VPS)
+    aem --no-open              Don't auto-open browser
+
+  Scan mode:
+    aem scan                   Print summary to stdout
+    aem scan -o map.html       Generate static HTML file
+
+  Common options:
+    -d, --dir <path>           Path to .claude/ directory (default: ~/.claude/)
+    -p, --port <port>          Server port (default: 3000)
+    -o, --output <path>        Save HTML to file (scan mode)
+    --headless                 API-only, no UI serving
+    --no-open                  Don't auto-open browser
+    -v, --version              Show version
+    -h, --help                 Show this help
 
   Examples:
-    aem                          # Scan ~/.claude/, open in browser
-    aem -d ./my-project/.claude  # Scan project-local config
-    aem -o ecosystem.html        # Save to file
-    aem -s 8080                  # Serve on localhost:8080 (VPS)
+    aem                        # Full UI on localhost:3000
+    aem --headless -p 3000     # API only (VPS, access remotely)
+    aem scan -o ecosystem.html # Static HTML file
 `);
 }
 
 function openBrowser(url) {
   const { exec } = require('child_process');
   const platform = process.platform;
-
   let cmd;
   if (platform === 'darwin') cmd = `open "${url}"`;
   else if (platform === 'win32') cmd = `start "" "${url}"`;
   else cmd = `xdg-open "${url}" 2>/dev/null || sensible-browser "${url}" 2>/dev/null || echo "Open ${url} in your browser"`;
-
   exec(cmd, (err) => {
-    if (err && platform === 'linux') {
-      console.log(`\n  Open in your browser: ${url}\n`);
-    }
+    if (err && platform === 'linux') console.log(`\n  Open in your browser: ${url}\n`);
   });
 }
 
-function main() {
+async function main() {
   const opts = parseArgs(process.argv.slice(2));
 
-  if (opts.version) {
-    console.log(VERSION);
-    return;
-  }
+  if (opts.version) { console.log(VERSION); return; }
+  if (opts.help) { printHelp(); return; }
 
-  if (opts.help) {
-    printHelp();
-    return;
-  }
-
-  // Resolve .claude/ directory
   const claudeDir = opts.claudeDir
     ? path.resolve(opts.claudeDir)
     : path.join(HOME, '.claude');
@@ -108,141 +103,75 @@ function main() {
     process.exit(1);
   }
 
-  console.log(`\n  Scanning ${claudeDir}...`);
+  // === SCAN MODE (one-shot, backward compat) ===
+  if (opts.command === 'scan') {
+    const { scanner } = require('../agent/scanner');
+    const { categorize } = require('../agent/categorizer');
+    const raw = scanner(claudeDir);
+    const data = categorize(raw);
 
-  // Scan
-  const raw = scanner(claudeDir);
+    const instrCount = (raw.instructions || []).length;
+    const rulesCount = (raw.rules || []).length;
 
-  const instrCount = (raw.instructions || []).length;
-  const rulesCount = (raw.rules || []).length;
-  console.log(`  Found: ${raw.skills.length} skills, ${raw.agents.length} agents, ${raw.mcpServers.length} MCP servers` +
-    (instrCount ? `, ${instrCount} instructions` : '') +
-    (rulesCount ? `, ${rulesCount} rules` : ''));
+    console.log(`\n  Scanning ${claudeDir}...`);
+    console.log(`  Found: ${raw.skills.length} skills, ${raw.agents.length} agents, ${raw.mcpServers.length} MCP servers` +
+      (instrCount ? `, ${instrCount} instructions` : '') +
+      (rulesCount ? `, ${rulesCount} rules` : ''));
 
-  // Categorize
-  const data = categorize(raw);
-
-  // Generate HTML (pass serve mode flag)
-  const html = generateHtml(data, !!opts.serve);
-
-  if (opts.serve) {
-    // Serve mode — full featured with API
-    const http = require('http');
-    const { connect, disconnect, getConnections } = require('../src/connector');
-    const projectRoot = process.cwd();
-
-    // Build source index from raw scan (skills, agents, mcp, instructions, rules)
-    const sourceIndex = {};
-    for (const item of [...raw.skills, ...raw.agents, ...(raw.instructions || []), ...(raw.rules || [])]) {
-      if (item.filePath) sourceIndex[item.name] = item;
+    if (opts.output) {
+      const { generateHtml } = require('../agent/generator');
+      const html = generateHtml(data, false);
+      const outPath = path.resolve(opts.output);
+      fs.writeFileSync(outPath, html, 'utf-8');
+      console.log(`  Saved to ${outPath}`);
+      if (opts.open) openBrowser(outPath);
+    } else if (!opts.output) {
+      // Print summary to stdout
+      console.log(`\n  Categories:`);
+      const cats = {};
+      data.forEach(d => { cats[d.cat] = (cats[d.cat] || 0) + 1; });
+      Object.entries(cats).sort((a, b) => b[1] - a[1]).forEach(([cat, count]) => {
+        console.log(`    ${cat}: ${count}`);
+      });
     }
-    for (const item of raw.mcpServers) {
-      sourceIndex[item.name] = item;
-    }
-
-    const server = http.createServer((req, res) => {
-      const url = new URL(req.url, `http://localhost:${opts.serve}`);
-
-      // CORS for local dev
-      res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-      if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
-
-      // API: Connect skill to tool
-      if (url.pathname === '/api/connect' && req.method === 'POST') {
-        let body = '';
-        req.on('data', c => body += c);
-        req.on('end', () => {
-          try {
-            const { name, tool, type } = JSON.parse(body);
-            const source = sourceIndex[name];
-            if (!source) {
-              res.writeHead(404, { 'Content-Type': 'application/json' });
-              res.end(JSON.stringify({ ok: false, error: 'Item not found' }));
-              return;
-            }
-            const result = connect(source.filePath, tool, type, name, projectRoot, source.raw);
-            res.writeHead(result.ok ? 200 : 400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify(result));
-          } catch (e) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ ok: false, error: e.message }));
-          }
-        });
-        return;
-      }
-
-      // API: Disconnect
-      if (url.pathname === '/api/disconnect' && req.method === 'POST') {
-        let body = '';
-        req.on('data', c => body += c);
-        req.on('end', () => {
-          try {
-            const { name, tool, type } = JSON.parse(body);
-            const result = disconnect(tool, type, name, projectRoot);
-            res.writeHead(result.ok ? 200 : 400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify(result));
-          } catch (e) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ ok: false, error: e.message }));
-          }
-        });
-        return;
-      }
-
-      // API: Get connections for an item
-      if (url.pathname === '/api/connections' && req.method === 'GET') {
-        const name = url.searchParams.get('name');
-        const type = url.searchParams.get('type');
-        const source = sourceIndex[name];
-        const connections = getConnections(
-          source ? source.filePath : null, type, name, projectRoot
-        );
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(connections));
-        return;
-      }
-
-      // API: Rescan
-      if (url.pathname === '/api/rescan' && req.method === 'POST') {
-        const newRaw = scanner(claudeDir);
-        const newData = categorize(newRaw);
-        // Update source index
-        for (const item of [...newRaw.skills, ...newRaw.agents, ...(newRaw.instructions || []), ...(newRaw.rules || [])]) {
-          if (item.filePath) sourceIndex[item.name] = item;
-        }
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, data: newData, count: newData.length }));
-        return;
-      }
-
-      // Default: serve HTML
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      res.end(html);
-    });
-
-    server.listen(opts.serve, () => {
-      const url = `http://localhost:${opts.serve}`;
-      console.log(`  Serving at ${url}`);
-      console.log(`  API enabled: connect, disconnect, rescan\n`);
-      if (opts.open) openBrowser(url);
-    });
-  } else if (opts.output) {
-    // File output
-    const outPath = path.resolve(opts.output);
-    fs.writeFileSync(outPath, html, 'utf-8');
-    console.log(`  Saved to ${outPath}`);
-    if (opts.open) openBrowser(outPath);
     console.log('');
-  } else {
-    // Temp file
-    const os = require('os');
-    const tmpFile = path.join(os.tmpdir(), `claude-ecosystem-${Date.now()}.html`);
-    fs.writeFileSync(tmpFile, html, 'utf-8');
-    console.log(`  Opening in browser...\n`);
-    openBrowser(tmpFile);
+    return;
   }
+
+  // === AGENT MODE (default) ===
+  console.log(`\n  AI Ecosystem Map v${VERSION}`);
+  console.log(`  Scanning ${claudeDir}...`);
+
+  const { startServer } = require('../agent/server');
+  const server = await startServer({
+    port: opts.port,
+    claudeDir,
+    projectRoot: process.cwd(),
+    headless: opts.headless,
+  });
+
+  const url = `http://localhost:${opts.port}`;
+  console.log(`  Agent running at ${url}`);
+  if (opts.headless) {
+    console.log(`  Mode: headless (API only)`);
+  }
+  console.log(`  API: ${url}/api/assets`);
+  console.log(`  WebSocket: ws://localhost:${opts.port}/ws`);
+  console.log('');
+
+  if (opts.open && !opts.headless) {
+    openBrowser(url);
+  }
+
+  // Graceful shutdown
+  process.on('SIGINT', () => {
+    console.log('\n  Shutting down...');
+    server.close();
+    process.exit(0);
+  });
 }
 
-main();
+main().catch(err => {
+  console.error('Error:', err.message);
+  process.exit(1);
+});

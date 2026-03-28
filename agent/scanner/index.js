@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { parseFrontmatter } = require('./parser');
+const { parseFrontmatter } = require('../parser');
 
 const HOME = process.env.HOME || process.env.USERPROFILE || '';
 
