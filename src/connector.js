@@ -83,14 +83,26 @@ function getTargetPath(tool, itemType, itemName, projectRoot) {
 }
 
 /**
+ * Resolve MCP config path for a given tool
+ */
+function getMcpConfigPath(tool, projectRoot) {
+  switch (tool) {
+    case 'claude': return path.join(HOME, '.claude', '.mcp.json');
+    case 'codex': return path.join(HOME, '.codex', 'mcp.json');
+    case 'gemini': return path.join(HOME, '.gemini', 'mcp.json');
+    case 'cursor': return projectRoot ? path.join(projectRoot, '.mcp.json') : null;
+    case 'windsurf': return path.join(HOME, '.windsurf', 'mcp.json');
+    case 'continue_dev': return path.join(HOME, '.continue', 'config.json');
+    default: return null;
+  }
+}
+
+/**
  * Add MCP server entry to a tool's config JSON
  */
 function connectMcp(serverName, serverConfig, tool, projectRoot) {
-  let configPath;
-  if (tool === 'claude') configPath = path.join(HOME, '.claude', '.mcp.json');
-  else if (tool === 'cursor' && projectRoot) configPath = path.join(projectRoot, '.mcp.json');
-  else if (tool === 'continue_dev') configPath = path.join(HOME, '.continue', 'config.json');
-  else return { ok: false, error: `${tool} doesn't support MCP server management` };
+  const configPath = getMcpConfigPath(tool, projectRoot);
+  if (!configPath) return { ok: false, error: `${tool} doesn't support MCP server management` };
 
   let config = {};
   if (fs.existsSync(configPath)) {
@@ -118,11 +130,8 @@ function connectMcp(serverName, serverConfig, tool, projectRoot) {
  * Remove MCP server entry from a tool's config JSON
  */
 function disconnectMcp(serverName, tool, projectRoot) {
-  let configPath;
-  if (tool === 'claude') configPath = path.join(HOME, '.claude', '.mcp.json');
-  else if (tool === 'cursor' && projectRoot) configPath = path.join(projectRoot, '.mcp.json');
-  else if (tool === 'continue_dev') configPath = path.join(HOME, '.continue', 'config.json');
-  else return { ok: false, error: `${tool} doesn't support MCP` };
+  const configPath = getMcpConfigPath(tool, projectRoot);
+  if (!configPath) return { ok: false, error: `${tool} doesn't support MCP` };
 
   if (!fs.existsSync(configPath)) {
     return { ok: true, message: 'Already disconnected' };
@@ -223,7 +232,7 @@ function disconnect(tool, itemType, itemName, projectRoot) {
  */
 function getConnections(sourcePath, itemType, itemName, projectRoot) {
   const connections = {};
-  const MCP_TOOLS = ['claude', 'cursor', 'continue_dev'];
+  const MCP_TOOLS = ['claude', 'codex', 'gemini', 'cursor', 'windsurf', 'continue_dev'];
 
   for (const tool of Object.keys(TOOL_TARGETS)) {
     // Skip tools that aren't installed
@@ -235,11 +244,8 @@ function getConnections(sourcePath, itemType, itemName, projectRoot) {
         connections[tool] = { supported: false };
         continue;
       }
-      let configPath;
-      if (tool === 'claude') configPath = path.join(HOME, '.claude', '.mcp.json');
-      else if (tool === 'cursor' && projectRoot) configPath = path.join(projectRoot, '.mcp.json');
-      else if (tool === 'continue_dev') configPath = path.join(HOME, '.continue', 'config.json');
-      else { connections[tool] = { supported: false }; continue; }
+      const configPath = getMcpConfigPath(tool, projectRoot);
+      if (!configPath) { connections[tool] = { supported: false }; continue; }
 
       if (!fs.existsSync(configPath)) {
         connections[tool] = { supported: true, connected: false };
