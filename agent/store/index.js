@@ -88,6 +88,16 @@ function initStore() {
       reverted INTEGER DEFAULT 0
     );
 
+    CREATE TABLE IF NOT EXISTS running_agents (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      url TEXT NOT NULL,
+      description TEXT,
+      protocol TEXT DEFAULT 'mcp',
+      is_active INTEGER DEFAULT 1,
+      created_at INTEGER DEFAULT (unixepoch())
+    );
+
     CREATE INDEX IF NOT EXISTS idx_assets_type ON assets(type);
     CREATE INDEX IF NOT EXISTS idx_assets_category ON assets(category);
     CREATE INDEX IF NOT EXISTS idx_assets_env ON assets(environment_id);
@@ -315,6 +325,25 @@ function undoLast() {
   return { ok: true, action: last.action, asset: last.asset_name, details: JSON.parse(last.details || '{}') };
 }
 
+// ─── Running Agents ──────────────────────────────────
+
+function getRunningAgents() {
+  return getDb().prepare('SELECT * FROM running_agents WHERE is_active = 1 ORDER BY name').all();
+}
+
+function addRunningAgent(agent) {
+  const d = getDb();
+  const id = genId();
+  d.prepare('INSERT INTO running_agents (id, name, url, description, protocol) VALUES (?, ?, ?, ?, ?)').run(
+    id, agent.name, agent.url, agent.description || '', agent.protocol || 'mcp'
+  );
+  return id;
+}
+
+function removeRunningAgent(id) {
+  getDb().prepare('DELETE FROM running_agents WHERE id = ?').run(id);
+}
+
 // ─── Cleanup ──────────────────────────────────────────
 
 function close() {
@@ -338,6 +367,9 @@ module.exports = {
   recordAction,
   getHistory,
   undoLast,
+  getRunningAgents,
+  addRunningAgent,
+  removeRunningAgent,
   close,
   DB_PATH,
 };
