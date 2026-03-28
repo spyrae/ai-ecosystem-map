@@ -1,14 +1,26 @@
-# claude-ecosystem-map
+# ai-ecosystem-map
 
-Interactive visual map of your Claude Code ecosystem. Auto-discovers skills, agents, and MCP servers from your `.claude/` configuration.
+Interactive visual map of your AI coding ecosystem. Auto-discovers skills, agents, MCP servers, rules, and instructions from **all major AI coding tools**.
 
-![Screenshot](https://raw.githubusercontent.com/rbelov/claude-ecosystem-map/main/screenshot.png)
+## Supported Tools
+
+| Tool | What it scans | Badge |
+|------|--------------|-------|
+| **Claude Code** | `~/.claude/commands/`, `~/.claude/agents/`, `.mcp.json` | ![C](https://img.shields.io/badge/C-d4a0ff?style=flat-square&logoColor=white) |
+| **Codex CLI** | `.codex/`, `AGENTS.md`, shared skills | ![X](https://img.shields.io/badge/X-10a37f?style=flat-square&logoColor=white) |
+| **Gemini CLI** | `.gemini/`, `GEMINI.md`, shared skills | ![G](https://img.shields.io/badge/G-4285f4?style=flat-square&logoColor=white) |
+| **Cursor** | `.cursor/rules/`, `.cursorrules` | ![U](https://img.shields.io/badge/U-00d4aa?style=flat-square&logoColor=white) |
+| **Windsurf** | `.windsurf/rules/`, `.windsurfrules` | ![W](https://img.shields.io/badge/W-06b6d4?style=flat-square&logoColor=white) |
+| **Copilot** | `.github/copilot-instructions.md`, `AGENTS.md` | ![P](https://img.shields.io/badge/P-8b949e?style=flat-square&logoColor=white) |
+| **Continue** | `.continue/config.json` | ![N](https://img.shields.io/badge/N-f97316?style=flat-square&logoColor=white) |
+| **MCP** | `.mcp.json` (universal protocol) | All supporting tools |
 
 ## Features
 
-- **Auto-discovery** — scans `~/.claude/commands/`, `~/.claude/agents/`, `~/.claude/.mcp.json`
+- **Multi-tool discovery** — scans configs from 7 AI coding assistants
+- **Provider badges** — colored icons show which AI tools can use each skill
 - **Smart search** — describe your task, find the right tool
-- **Dependency graph** — see what orchestrators use and what's used by whom
+- **Dependency graph** — "uses" and "used by" relationships
 - **Auto-categorization** — groups by Development, DevOps, Security, Content, SEO, etc.
 - **Orchestrator detection** — highlights multi-agent pipelines
 - **Zero dependencies** — pure Node.js, nothing to install
@@ -17,7 +29,7 @@ Interactive visual map of your Claude Code ecosystem. Auto-discovers skills, age
 ## Quick Start
 
 ```bash
-npx claude-ecosystem-map
+npx ai-ecosystem-map
 ```
 
 That's it. Opens an interactive HTML map in your browser.
@@ -25,20 +37,20 @@ That's it. Opens an interactive HTML map in your browser.
 ## Install Globally
 
 ```bash
-npm install -g claude-ecosystem-map
+npm install -g ai-ecosystem-map
 
 # Then use anywhere:
-cem
+aem
 ```
 
 ## Options
 
 ```
-cem                          # Scan ~/.claude/, open in browser
-cem -d ./project/.claude     # Scan project-local config
-cem -o ecosystem.html        # Save to file
-cem -s 8080                  # Serve on localhost:8080 (great for VPS)
-cem --no-open                # Don't auto-open browser (VPS/headless)
+aem                          # Scan ~/.claude/, open in browser
+aem -d ./project/.claude     # Scan project-local config
+aem -o ecosystem.html        # Save to file
+aem -s 8080                  # Serve on localhost:8080 (great for VPS)
+aem --no-open                # Don't auto-open browser (VPS/headless)
 ```
 
 ### VPS Usage
@@ -46,53 +58,50 @@ cem --no-open                # Don't auto-open browser (VPS/headless)
 On a headless server, use `--serve` to start a local HTTP server:
 
 ```bash
-cem -s 3000 --no-open
+aem -s 3000 --no-open
 # Then open http://your-server:3000 in your browser
 ```
 
 Or generate a file and download it:
 
 ```bash
-cem -o /tmp/ecosystem.html --no-open
+aem -o /tmp/ecosystem.html --no-open
 # Then scp/download the file
 ```
 
-## What It Scans
+## What It Discovers
 
-| Source | Location | What |
-|--------|----------|------|
-| **Skills** | `~/.claude/commands/*.md` | Slash commands (including subdirectories) |
-| **Agents** | `~/.claude/agents/*.md` | Custom agent definitions |
-| **MCP Servers** | `~/.claude/.mcp.json` | Model Context Protocol servers |
+| Type | Source | Description |
+|------|--------|-------------|
+| **Skills** | `.claude/commands/*.md` | Slash commands with frontmatter |
+| **Agents** | `.claude/agents/*.md` | Custom agent definitions |
+| **MCP Servers** | `.mcp.json` | Model Context Protocol servers |
+| **Instructions** | `AGENTS.md`, `GEMINI.md`, etc. | Cross-IDE instruction files |
+| **Rules** | `.cursor/rules/`, `.windsurf/rules/` | IDE-specific rules |
 
-### Frontmatter Support
+### Provider Detection
 
-Skills and agents with YAML frontmatter get richer cards:
+Each card shows colored badges for compatible AI tools:
 
-```markdown
----
-name: my-skill
-description: "Does something amazing. Use when X happens."
----
-
-# My Skill
-...
-```
+- Skills in `.claude/commands/` → Claude + Codex + Gemini (shared skill format)
+- `AGENTS.md` → Codex + Copilot + Cursor + Windsurf
+- `.cursor/rules/` → Cursor only
+- MCP servers → Claude + Cursor + Continue (MCP protocol)
 
 ## How It Works
 
-1. **Scan** — reads `.claude/` directory structure
+1. **Scan** — reads config directories for all supported AI tools
 2. **Parse** — extracts frontmatter (name, description) from `.md` files
-3. **Categorize** — auto-assigns categories based on keywords in name/description
-4. **Detect orchestrators** — identifies multi-agent pipelines
-5. **Build dependency graph** — links "uses" and "used by" relationships
+3. **Detect providers** — maps each item to compatible AI tools
+4. **Categorize** — auto-assigns categories based on keywords
+5. **Build graph** — links "uses" and "used by" dependencies
 6. **Generate** — creates self-contained HTML with embedded data
 7. **Serve** — opens in browser or starts HTTP server
 
 ## Requirements
 
 - Node.js >= 18
-- A `.claude/` directory with some skills, agents, or MCP config
+- At least one AI coding tool configured (`.claude/`, `.cursor/`, etc.)
 
 ## License
 

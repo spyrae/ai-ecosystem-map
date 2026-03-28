@@ -1,11 +1,11 @@
 {
-  "name": "claude-ecosystem-map",
+  "name": "ai-ecosystem-map",
   "version": "1.0.0",
-  "description": "Interactive visual map of your Claude Code ecosystem: skills, agents, MCP servers — auto-discovered from your local .claude/ config",
+  "description": "Interactive visual map of your AI coding ecosystem: skills, agents, MCP servers, rules — auto-discovered from Claude, Codex, Gemini, Cursor, Windsurf, Copilot configs",
   "main": "bin/cli.js",
   "bin": {
-    "claude-ecosystem-map": "bin/cli.js",
-    "cem": "bin/cli.js"
+    "ai-ecosystem-map": "bin/cli.js",
+    "aem": "bin/cli.js"
   },
   "scripts": {
     "start": "node bin/cli.js"
@@ -13,6 +13,11 @@
   "keywords": [
     "claude",
     "claude-code",
+    "codex",
+    "gemini",
+    "cursor",
+    "windsurf",
+    "copilot",
     "skills",
     "agents",
     "mcp",
@@ -24,7 +29,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/rbelov/claude-ecosystem-map"
+    "url": "https://github.com/spyrae/ai-ecosystem-map"
   },
   "engines": {
     "node": ">=18.0.0"

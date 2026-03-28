@@ -145,10 +145,11 @@ function categorize(raw) {
       name: skill.name,
       type: skill.type,
       cat: orch ? 'Orchestrators' : cat,
-      desc: skill.desc.substring(0, 200),
+      desc: (skill.desc || '').substring(0, 200),
       tags: generateTags(skill),
       isOrchestrator: orch,
-      deps: extractDeps(skill.desc),
+      deps: extractDeps(skill.desc || ''),
+      providers: skill.providers || [],
       keywords: `${skill.name} ${skill.desc}`.toLowerCase().substring(0, 200),
     });
   }
@@ -159,11 +160,42 @@ function categorize(raw) {
       name: agent.name,
       type: 'agent',
       cat: 'Agents',
-      desc: agent.desc.substring(0, 200),
+      desc: (agent.desc || '').substring(0, 200),
       tags: generateTags(agent),
       isOrchestrator: false,
       deps: [],
+      providers: agent.providers || [],
       keywords: `${agent.name} ${agent.desc}`.toLowerCase().substring(0, 200),
+    });
+  }
+
+  // Process instructions (AGENTS.md, GEMINI.md, etc.)
+  for (const instr of (raw.instructions || [])) {
+    allItems.push({
+      name: instr.name,
+      type: 'instruction',
+      cat: 'Instructions',
+      desc: (instr.desc || '').substring(0, 200),
+      tags: generateTags(instr),
+      isOrchestrator: false,
+      deps: [],
+      providers: instr.providers || [],
+      keywords: `${instr.name} ${instr.desc}`.toLowerCase().substring(0, 200),
+    });
+  }
+
+  // Process rules (Cursor, Windsurf)
+  for (const rule of (raw.rules || [])) {
+    allItems.push({
+      name: rule.name,
+      type: 'rule',
+      cat: 'Rules',
+      desc: (rule.desc || '').substring(0, 200),
+      tags: generateTags(rule),
+      isOrchestrator: false,
+      deps: [],
+      providers: rule.providers || [],
+      keywords: `${rule.name} ${rule.desc}`.toLowerCase().substring(0, 200),
     });
   }
 
@@ -173,10 +205,11 @@ function categorize(raw) {
       name: mcp.name,
       type: 'mcp',
       cat: 'MCP Servers',
-      desc: mcp.desc.substring(0, 200),
+      desc: (mcp.desc || '').substring(0, 200),
       tags: generateTags(mcp),
       isOrchestrator: false,
       deps: [],
+      providers: mcp.providers || [],
       keywords: `${mcp.name} ${mcp.desc}`.toLowerCase().substring(0, 200),
     });
   }

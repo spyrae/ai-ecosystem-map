@@ -41,15 +41,16 @@ function parseArgs(args) {
 
 function printHelp() {
   console.log(`
-  claude-ecosystem-map v${VERSION}
+  ai-ecosystem-map v${VERSION}
 
-  Generates an interactive visual map of your Claude Code ecosystem:
-  skills, agents, MCP servers — auto-discovered from .claude/ config.
+  Generates an interactive visual map of your AI coding ecosystem.
+  Auto-discovers skills, agents, MCP servers, rules, and instructions
+  from Claude, Codex, Gemini, Cursor, Windsurf, Copilot, and Continue.
 
   Usage:
-    cem [options]
-    claude-ecosystem-map [options]
-    npx claude-ecosystem-map [options]
+    aem [options]
+    ai-ecosystem-map [options]
+    npx ai-ecosystem-map [options]
 
   Options:
     -d, --dir <path>     Path to .claude/ directory (default: ~/.claude/)
@@ -60,10 +61,10 @@ function printHelp() {
     -h, --help           Show this help
 
   Examples:
-    cem                          # Scan ~/.claude/, open in browser
-    cem -d ./my-project/.claude  # Scan project-local config
-    cem -o ecosystem.html        # Save to file
-    cem -s 8080                  # Serve on localhost:8080
+    aem                          # Scan ~/.claude/, open in browser
+    aem -d ./my-project/.claude  # Scan project-local config
+    aem -o ecosystem.html        # Save to file
+    aem -s 8080                  # Serve on localhost:8080 (VPS)
 `);
 }
 
@@ -112,7 +113,11 @@ function main() {
   // Scan
   const raw = scanner(claudeDir);
 
-  console.log(`  Found: ${raw.skills.length} skills, ${raw.agents.length} agents, ${raw.mcpServers.length} MCP servers`);
+  const instrCount = (raw.instructions || []).length;
+  const rulesCount = (raw.rules || []).length;
+  console.log(`  Found: ${raw.skills.length} skills, ${raw.agents.length} agents, ${raw.mcpServers.length} MCP servers` +
+    (instrCount ? `, ${instrCount} instructions` : '') +
+    (rulesCount ? `, ${rulesCount} rules` : ''));
 
   // Categorize
   const data = categorize(raw);
