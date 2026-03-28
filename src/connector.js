@@ -6,6 +6,23 @@ const path = require('path');
 const HOME = process.env.HOME || process.env.USERPROFILE || '';
 
 /**
+ * Check if a tool is installed (config directory exists on disk)
+ */
+function isToolInstalled(tool) {
+  const checkPaths = {
+    claude: [path.join(HOME, '.claude')],
+    codex: [path.join(HOME, '.codex')],
+    gemini: [path.join(HOME, '.gemini')],
+    cursor: [path.join(HOME, '.cursor'), path.join(HOME, 'Library', 'Application Support', 'Cursor')],
+    windsurf: [path.join(HOME, '.windsurf'), path.join(HOME, 'Library', 'Application Support', 'Windsurf')],
+    copilot: [path.join(HOME, '.github')],
+    continue_dev: [path.join(HOME, '.continue')],
+  };
+  const paths = checkPaths[tool] || [];
+  return paths.some(p => fs.existsSync(p));
+}
+
+/**
  * Target directories for each AI tool.
  * Skills/agents get symlinked into these paths.
  */
@@ -209,6 +226,9 @@ function getConnections(sourcePath, itemType, itemName, projectRoot) {
   const MCP_TOOLS = ['claude', 'cursor', 'continue_dev'];
 
   for (const tool of Object.keys(TOOL_TARGETS)) {
+    // Skip tools that aren't installed
+    if (!isToolInstalled(tool)) continue;
+
     // MCP servers: check JSON config
     if (itemType === 'mcp') {
       if (!MCP_TOOLS.includes(tool)) {
@@ -273,4 +293,4 @@ function availableTools(itemType) {
   return tools;
 }
 
-module.exports = { connect, disconnect, getConnections, connectMcp, disconnectMcp, availableTools, TOOL_TARGETS };
+module.exports = { connect, disconnect, getConnections, connectMcp, disconnectMcp, availableTools, isToolInstalled, TOOL_TARGETS };
