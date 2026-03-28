@@ -122,19 +122,107 @@ function main() {
   // Categorize
   const data = categorize(raw);
 
-  // Generate HTML
-  const html = generateHtml(data);
+  // Generate HTML (pass serve mode flag)
+  const html = generateHtml(data, !!opts.serve);
 
   if (opts.serve) {
-    // Serve mode
+    // Serve mode — full featured with API
     const http = require('http');
+    const { connect, disconnect, getConnections } = require('../src/connector');
+    const projectRoot = process.cwd();
+
+    // Build source path index from raw scan
+    const sourceIndex = {};
+    for (const item of [...raw.skills, ...raw.agents, ...(raw.instructions || []), ...(raw.rules || [])]) {
+      if (item.filePath) sourceIndex[item.name] = item;
+    }
+
     const server = http.createServer((req, res) => {
+      const url = new URL(req.url, `http://localhost:${opts.serve}`);
+
+      // CORS for local dev
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+      if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+
+      // API: Connect skill to tool
+      if (url.pathname === '/api/connect' && req.method === 'POST') {
+        let body = '';
+        req.on('data', c => body += c);
+        req.on('end', () => {
+          try {
+            const { name, tool, type } = JSON.parse(body);
+            const source = sourceIndex[name];
+            if (!source) {
+              res.writeHead(404, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ ok: false, error: 'Item not found' }));
+              return;
+            }
+            const result = connect(source.filePath, tool, type, name, projectRoot);
+            res.writeHead(result.ok ? 200 : 400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result));
+          } catch (e) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: false, error: e.message }));
+          }
+        });
+        return;
+      }
+
+      // API: Disconnect
+      if (url.pathname === '/api/disconnect' && req.method === 'POST') {
+        let body = '';
+        req.on('data', c => body += c);
+        req.on('end', () => {
+          try {
+            const { name, tool, type } = JSON.parse(body);
+            const result = disconnect(tool, type, name, projectRoot);
+            res.writeHead(result.ok ? 200 : 400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result));
+          } catch (e) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: false, error: e.message }));
+          }
+        });
+        return;
+      }
+
+      // API: Get connections for an item
+      if (url.pathname === '/api/connections' && req.method === 'GET') {
+        const name = url.searchParams.get('name');
+        const type = url.searchParams.get('type');
+        const source = sourceIndex[name];
+        const connections = getConnections(
+          source ? source.filePath : null, type, name, projectRoot
+        );
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(connections));
+        return;
+      }
+
+      // API: Rescan
+      if (url.pathname === '/api/rescan' && req.method === 'POST') {
+        const newRaw = scanner(claudeDir);
+        const newData = categorize(newRaw);
+        // Update source index
+        for (const item of [...newRaw.skills, ...newRaw.agents, ...(newRaw.instructions || []), ...(newRaw.rules || [])]) {
+          if (item.filePath) sourceIndex[item.name] = item;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, data: newData, count: newData.length }));
+        return;
+      }
+
+      // Default: serve HTML
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(html);
     });
+
     server.listen(opts.serve, () => {
       const url = `http://localhost:${opts.serve}`;
-      console.log(`  Serving at ${url}\n`);
+      console.log(`  Serving at ${url}`);
+      console.log(`  API enabled: connect, disconnect, rescan\n`);
       if (opts.open) openBrowser(url);
     });
   } else if (opts.output) {
