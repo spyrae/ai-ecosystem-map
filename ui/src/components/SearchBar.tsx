@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useRef, useImperativeHandle, forwardRef } from 'react';
 
 interface SearchBarProps {
   value: string;
@@ -6,8 +6,16 @@ interface SearchBarProps {
   placeholder?: string;
 }
 
-export function SearchBar({ value, onChange, placeholder = 'Search skills, agents, servers...' }: SearchBarProps) {
+export interface SearchBarHandle {
+  focus: () => void;
+}
+
+export const SearchBar = forwardRef<SearchBarHandle, SearchBarProps>(function SearchBar({ value, onChange, placeholder = 'Search skills, agents, servers...' }, ref) {
   const inputRef = useRef<HTMLInputElement>(null);
+
+  useImperativeHandle(ref, () => ({
+    focus: () => inputRef.current?.focus(),
+  }));
 
   return (
     <div className="relative">
@@ -40,4 +48,4 @@ export function SearchBar({ value, onChange, placeholder = 'Search skills, agent
       )}
     </div>
   );
-}
+});

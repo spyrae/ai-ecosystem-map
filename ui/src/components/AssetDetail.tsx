@@ -102,7 +102,7 @@ export function AssetDetail({ asset, onClose, onDeleted, onConnect }: AssetDetai
 
   return (
     <>
-      <div className="fixed inset-0 z-50 flex items-center justify-center" onClick={onClose}>
+      <div className="animate-fade-in fixed inset-0 z-50 flex items-center justify-center" onClick={onClose}>
         <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
         <div
           className="relative z-10 w-full max-w-2xl max-h-[85vh] overflow-y-auto rounded-2xl border border-border p-6"

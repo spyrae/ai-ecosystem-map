@@ -1,0 +1,15 @@
+desktop/
+test/
+.github/
+.claude/
+.gitignore
+*.db
+*.log
+ui/src/
+ui/node_modules/
+ui/package-lock.json
+ui/tsconfig*.json
+ui/vite.config.ts
+ui/index.html
+ui/postcss.config.js
+ui/tailwind.config.js

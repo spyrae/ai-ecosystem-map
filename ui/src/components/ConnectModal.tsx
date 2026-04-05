@@ -72,7 +72,7 @@ export function ConnectModal({ asset, onClose }: ConnectModalProps) {
     <>
       {/* Backdrop */}
       <div
-        className="fixed inset-0 z-[200] bg-black/60 flex items-center justify-center"
+        className="animate-fade-in fixed inset-0 z-[200] bg-black/60 flex items-center justify-center"
         onClick={onClose}
       >
         {/* Panel */}

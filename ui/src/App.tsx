@@ -1,8 +1,10 @@
 import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
+import { DndContext, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
+import type { DragStartEvent, DragEndEvent } from '@dnd-kit/core';
 import type { Asset, AssetType, Provider, Stats } from './types';
-import { fetchAssets, fetchStats, fetchCategories, rescan } from './lib/api';
+import { fetchAssets, fetchStats, fetchCategories, rescan, connectAsset } from './lib/api';
 import * as ws from './lib/ws';
-import { SearchBar } from './components/SearchBar';
+import { SearchBar, type SearchBarHandle } from './components/SearchBar';
 import { Sidebar } from './components/Sidebar';
 import { StatsBar } from './components/StatsBar';
 import { CategorySection } from './components/CategorySection';
@@ -12,6 +14,7 @@ import { CreateAssetModal } from './components/CreateAssetModal';
 import { ProjectsView } from './components/ProjectsView';
 import { ServersView } from './components/ServersView';
 import { RunningAgentsView } from './components/RunningAgentsView';
+import { DragOverlay } from './components/DragOverlay';
 
 type View = 'map' | 'projects' | 'agents' | 'servers';
 
@@ -31,7 +34,65 @@ export default function App() {
   const [highlightName, setHighlightName] = useState<string | null>(null);
   const [rescanning, setRescanning] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [draggedAsset, setDraggedAsset] = useState<Asset | null>(null);
   const highlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchRef = useRef<SearchBarHandle>(null);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      const meta = e.metaKey || e.ctrlKey;
+      const target = e.target as HTMLElement;
+      const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
+
+      // Cmd+F — focus search
+      if (meta && e.key === 'f') {
+        e.preventDefault();
+        setView('map');
+        setTimeout(() => searchRef.current?.focus(), 50);
+        return;
+      }
+      // Cmd+N — create new asset
+      if (meta && e.key === 'n') {
+        e.preventDefault();
+        setShowCreate(true);
+        return;
+      }
+      // Cmd+R — rescan
+      if (meta && e.key === 'r') {
+        e.preventDefault();
+        handleRescan();
+        return;
+      }
+      // Cmd+1/2/3/4 — switch views
+      if (meta && e.key >= '1' && e.key <= '4') {
+        e.preventDefault();
+        const views: View[] = ['map', 'projects', 'agents', 'servers'];
+        setView(views[parseInt(e.key) - 1]);
+        return;
+      }
+      // Escape — close modals/panels, clear search
+      if (e.key === 'Escape' && !isInput) {
+        if (detailAsset) { setDetailAsset(null); return; }
+        if (connectTarget) { setConnectTarget(null); return; }
+        if (showCreate) { setShowCreate(false); return; }
+        if (search) { setSearch(''); return; }
+      }
+      // Escape in search input — clear and blur
+      if (e.key === 'Escape' && isInput && target.tagName === 'INPUT') {
+        if (search) { setSearch(''); }
+        (target as HTMLInputElement).blur();
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [detailAsset, connectTarget, showCreate, search]);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 8 },
+    })
+  );
 
   const loadData = useCallback(async () => {
     try {
@@ -117,6 +178,26 @@ export default function App() {
     }
   };
 
+  function handleDragStart(event: DragStartEvent) {
+    const asset = event.active.data.current?.asset as Asset | undefined;
+    if (asset) setDraggedAsset(asset);
+  }
+
+  async function handleDragEnd(event: DragEndEvent) {
+    setDraggedAsset(null);
+    const asset = event.active.data.current?.asset as Asset | undefined;
+    const provider = event.over?.data.current?.provider as string | undefined;
+    if (asset && provider) {
+      try {
+        await connectAsset(asset.name, provider, asset.type);
+        showToast(`Connected ${asset.name} → ${provider}`);
+        loadData();
+      } catch {
+        showToast('Connection failed');
+      }
+    }
+  }
+
   const NAV_ITEMS: { key: View; label: string; icon: string }[] = [
     { key: 'map', label: 'Ecosystem Map', icon: '🗺️' },
     { key: 'projects', label: 'Projects', icon: '📂' },
@@ -124,7 +205,7 @@ export default function App() {
     { key: 'servers', label: 'Servers', icon: '🖥️' },
   ];
 
-  const NAV_ICONS: Record<string, JSX.Element> = {
+  const NAV_ICONS: Record<string, React.ReactNode> = {
     map: <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" /></svg>,
     projects: <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" /></svg>,
     agents: <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456z" /></svg>,
@@ -159,10 +240,16 @@ export default function App() {
       {/* Main content */}
       <main className="flex-1 overflow-hidden">
         {view === 'map' && (
+          <DndContext
+            sensors={sensors}
+            onDragStart={handleDragStart}
+            onDragEnd={handleDragEnd}
+            onDragCancel={() => setDraggedAsset(null)}
+          >
           <div className="flex h-full flex-col">
             {/* Top bar: search + actions */}
             <div className="flex items-center justify-between border-b border-border px-6 py-4 shrink-0">
-              <SearchBar value={search} onChange={setSearch} />
+              <SearchBar ref={searchRef} value={search} onChange={setSearch} />
               <div className="flex gap-2">
                 <button
                   onClick={handleRescan}
@@ -220,6 +307,8 @@ export default function App() {
               </div>
             </div>
           </div>
+          <DragOverlay activeAsset={draggedAsset} />
+          </DndContext>
         )}
         {view === 'projects' && <ProjectsView />}
         {view === 'agents' && <RunningAgentsView />}
@@ -249,7 +338,7 @@ export default function App() {
 
       {/* Global Toast */}
       {toast && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[300] rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-5 py-2.5 text-emerald-400 text-[13px] shadow-[0_8px_32px_rgba(0,0,0,.5)] backdrop-blur-sm">
+        <div className="animate-slide-up fixed bottom-6 left-1/2 z-[300] rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-5 py-2.5 text-emerald-400 text-[13px] shadow-[0_8px_32px_rgba(0,0,0,.5)] backdrop-blur-sm">
           {toast}
         </div>
       )}

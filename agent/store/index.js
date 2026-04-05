@@ -1,6 +1,15 @@
 'use strict';
 
-const Database = require('better-sqlite3');
+let Database;
+try {
+  Database = require('better-sqlite3');
+} catch (err) {
+  console.error(`  Warning: better-sqlite3 failed to load (${err.message})`);
+  console.error(`  Run "npm rebuild better-sqlite3" or install build tools (python3, make, g++).`);
+  console.error(`  Falling back to in-memory mode (data will not persist).\n`);
+  Database = null;
+}
+
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -13,9 +22,16 @@ let db = null;
 
 /**
  * Initialize SQLite database. Creates tables on first run.
+ * Falls back to a no-op store if better-sqlite3 is unavailable.
  */
 function initStore() {
   if (db) return db;
+
+  if (!Database) {
+    _fallbackStore = createInMemoryFallback();
+    db = _fallbackStore;
+    return db;
+  }
 
   if (!fs.existsSync(DB_DIR)) {
     fs.mkdirSync(DB_DIR, { recursive: true });
@@ -121,6 +137,28 @@ function genId() {
   return crypto.randomBytes(12).toString('hex');
 }
 
+/**
+ * In-memory fallback store when better-sqlite3 is unavailable.
+ * Assets are kept in memory for the session, not persisted.
+ */
+function createInMemoryFallback() {
+  const mem = {
+    assets: [],
+    environments: [{ id: 'local-fallback', name: require('os').hostname(), type: 'local' }],
+    projects: [],
+    history: [],
+    runningAgents: [],
+  };
+  return mem;
+}
+
+/** Check if running in fallback mode */
+function isFallback() {
+  return db && db === _fallbackStore;
+}
+
+let _fallbackStore = null;
+
 function getDb() {
   if (!db) initStore();
   return db;
@@ -132,6 +170,24 @@ function getDb() {
  * Upsert assets from scan results. Only updates changed assets.
  */
 function upsertAssets(categorizedData, environmentId) {
+  if (isFallback()) {
+    _fallbackStore.assets = categorizedData.map(item => ({
+      id: genId(),
+      name: item.name,
+      type: item.type,
+      description: item.desc || '',
+      file_path: item.filePath || '',
+      environment_id: environmentId || 'local-fallback',
+      category: item.cat || 'Other',
+      is_orchestrator: item.isOrchestrator ? 1 : 0,
+      tags: JSON.stringify(item.tags || []),
+      providers: JSON.stringify(item.providers || []),
+      keywords: item.keywords || '',
+      deps: JSON.stringify(item.deps || []),
+    }));
+    return;
+  }
+
   const d = getDb();
   const upsert = d.prepare(`
     INSERT INTO assets (id, name, type, description, file_path, environment_id, category, is_orchestrator, tags, providers, keywords, deps, hash, discovered_at, updated_at)
@@ -191,6 +247,20 @@ function upsertAssets(categorizedData, environmentId) {
  * Get all assets with optional filters
  */
 function getAssets(filters = {}) {
+  if (isFallback()) {
+    let results = _fallbackStore.assets;
+    if (filters.type) results = results.filter(a => a.type === filters.type);
+    if (filters.category) results = results.filter(a => a.category === filters.category);
+    if (filters.environment_id) results = results.filter(a => a.environment_id === filters.environment_id);
+    if (filters.is_orchestrator) results = results.filter(a => a.is_orchestrator);
+    if (filters.provider) results = results.filter(a => (a.providers || '').includes(`"${filters.provider}"`));
+    if (filters.q) {
+      const q = filters.q.toLowerCase();
+      results = results.filter(a => a.name.toLowerCase().includes(q) || (a.description || '').toLowerCase().includes(q));
+    }
+    return results.map(deserializeAsset);
+  }
+
   const d = getDb();
   let sql = 'SELECT * FROM assets WHERE 1=1';
   const params = {};
@@ -215,6 +285,10 @@ function getAssets(filters = {}) {
 }
 
 function getAssetByName(name, type) {
+  if (isFallback()) {
+    const row = _fallbackStore.assets.find(a => a.name === name && a.type === type);
+    return row ? deserializeAsset(row) : null;
+  }
   const d = getDb();
   const row = d.prepare('SELECT * FROM assets WHERE name = ? AND type = ?').get(name, type);
   return row ? deserializeAsset(row) : null;
@@ -236,6 +310,12 @@ function deserializeAsset(row) {
 // ─── Stats ────────────────────────────────────────────
 
 function getStats() {
+  if (isFallback()) {
+    const a = _fallbackStore.assets;
+    const stats = { total: a.length, orchestrator: a.filter(x => x.is_orchestrator).length };
+    for (const item of a) stats[item.type] = (stats[item.type] || 0) + 1;
+    return stats;
+  }
   const d = getDb();
   const total = d.prepare('SELECT COUNT(*) as c FROM assets').get().c;
   const byType = d.prepare('SELECT type, COUNT(*) as c FROM assets GROUP BY type').all();
@@ -247,20 +327,25 @@ function getStats() {
 }
 
 function getCategories() {
+  if (isFallback()) {
+    const cats = {};
+    for (const a of _fallbackStore.assets) cats[a.category] = (cats[a.category] || 0) + 1;
+    return Object.entries(cats).sort((a, b) => b[1] - a[1]).map(([category, count]) => ({ category, count }));
+  }
   const d = getDb();
   return d.prepare('SELECT category, COUNT(*) as count FROM assets GROUP BY category ORDER BY count DESC').all();
 }
 
 function getProviderStats() {
-  const d = getDb();
-  const assets = d.prepare('SELECT providers, type FROM assets').all();
+  const items = isFallback() ? _fallbackStore.assets : getDb().prepare('SELECT providers, type FROM assets').all();
   const stats = {};
-  for (const a of assets) {
+  for (const a of items) {
     const providers = JSON.parse(a.providers || '[]');
     for (const p of providers) {
       if (!stats[p]) stats[p] = { name: p, count: 0, types: {} };
       stats[p].count++;
-      stats[p].types[a.type] = (stats[p].types[a.type] || 0) + 1;
+      const type = a.type;
+      stats[p].types[type] = (stats[p].types[type] || 0) + 1;
     }
   }
   return Object.values(stats);
@@ -269,16 +354,23 @@ function getProviderStats() {
 // ─── Environments ─────────────────────────────────────
 
 function getLocalEnvironmentId() {
+  if (isFallback()) return 'local-fallback';
   const d = getDb();
   const row = d.prepare('SELECT id FROM environments WHERE type = ?').get('local');
   return row ? row.id : null;
 }
 
 function getEnvironments() {
+  if (isFallback()) return _fallbackStore.environments;
   return getDb().prepare('SELECT * FROM environments ORDER BY type, name').all();
 }
 
 function addEnvironment(env) {
+  if (isFallback()) {
+    const id = genId();
+    _fallbackStore.environments.push({ id, name: env.name, type: env.type || 'remote', ...env });
+    return id;
+  }
   const d = getDb();
   const id = genId();
   d.prepare('INSERT INTO environments (id, name, type, ssh_host, ssh_port, ssh_user, ssh_key_path) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
@@ -290,10 +382,16 @@ function addEnvironment(env) {
 // ─── Projects ─────────────────────────────────────────
 
 function getProjects() {
+  if (isFallback()) return _fallbackStore.projects;
   return getDb().prepare('SELECT * FROM projects ORDER BY name').all();
 }
 
 function addProject(name, projectPath) {
+  if (isFallback()) {
+    const id = genId();
+    _fallbackStore.projects.push({ id, name, path: projectPath, environment_id: 'local-fallback' });
+    return id;
+  }
   const d = getDb();
   const id = genId();
   const envId = getLocalEnvironmentId();
@@ -306,6 +404,10 @@ function addProject(name, projectPath) {
 // ─── History ──────────────────────────────────────────
 
 function recordAction(action, assetName, details) {
+  if (isFallback()) {
+    _fallbackStore.history.push({ action, asset_name: assetName, details: JSON.stringify(details), created_at: Date.now() });
+    return;
+  }
   const d = getDb();
   d.prepare('INSERT INTO history (action, asset_name, details) VALUES (?, ?, ?)').run(
     action, assetName, JSON.stringify(details)
@@ -313,10 +415,12 @@ function recordAction(action, assetName, details) {
 }
 
 function getHistory(limit = 50) {
+  if (isFallback()) return _fallbackStore.history.slice(-limit).reverse();
   return getDb().prepare('SELECT * FROM history ORDER BY created_at DESC LIMIT ?').all(limit);
 }
 
 function undoLast() {
+  if (isFallback()) return { ok: false, error: 'Undo not available in fallback mode' };
   const d = getDb();
   const last = d.prepare('SELECT * FROM history WHERE reverted = 0 ORDER BY created_at DESC LIMIT 1').get();
   if (!last) return { ok: false, error: 'Nothing to undo' };
@@ -328,10 +432,16 @@ function undoLast() {
 // ─── Running Agents ──────────────────────────────────
 
 function getRunningAgents() {
+  if (isFallback()) return _fallbackStore.runningAgents;
   return getDb().prepare('SELECT * FROM running_agents WHERE is_active = 1 ORDER BY name').all();
 }
 
 function addRunningAgent(agent) {
+  if (isFallback()) {
+    const id = genId();
+    _fallbackStore.runningAgents.push({ id, ...agent, is_active: 1 });
+    return id;
+  }
   const d = getDb();
   const id = genId();
   d.prepare('INSERT INTO running_agents (id, name, url, description, protocol) VALUES (?, ?, ?, ?, ?)').run(
@@ -341,13 +451,19 @@ function addRunningAgent(agent) {
 }
 
 function removeRunningAgent(id) {
+  if (isFallback()) {
+    _fallbackStore.runningAgents = _fallbackStore.runningAgents.filter(a => a.id !== id);
+    return;
+  }
   getDb().prepare('DELETE FROM running_agents WHERE id = ?').run(id);
 }
 
 // ─── Cleanup ──────────────────────────────────────────
 
 function close() {
-  if (db) { db.close(); db = null; }
+  if (db && !isFallback()) { db.close(); }
+  db = null;
+  _fallbackStore = null;
 }
 
 module.exports = {

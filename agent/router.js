@@ -303,6 +303,58 @@ function createRouter(ctx) {
       return send(200, { ok: true, count: data.length });
     }
 
+    // POST /api/assets/move — move/copy asset between projects
+    if (url.pathname === '/api/assets/move' && req.method === 'POST') {
+      return readBody().then(body => {
+        if (!body || !body.sourcePath || !body.targetProjectPath || !body.type) {
+          return send(400, { ok: false, error: 'sourcePath, targetProjectPath, type required' });
+        }
+
+        const { sourcePath, name, type, targetProjectPath, method } = body;
+
+        try {
+          // Determine target directory based on asset type
+          let targetDir;
+          if (type === 'skill') {
+            targetDir = path.join(targetProjectPath, '.claude', 'commands');
+          } else if (type === 'agent') {
+            targetDir = path.join(targetProjectPath, '.claude', 'agents');
+          } else if (type === 'rule') {
+            targetDir = path.join(targetProjectPath, '.claude', 'rules');
+          } else {
+            return send(400, { ok: false, error: `Cannot move assets of type "${type}"` });
+          }
+
+          fs.mkdirSync(targetDir, { recursive: true });
+
+          const fileName = path.basename(sourcePath);
+          const targetPath = path.join(targetDir, fileName);
+
+          if (fs.existsSync(targetPath)) {
+            return send(409, { ok: false, error: `Asset already exists at ${targetPath}` });
+          }
+
+          if (method === 'symlink') {
+            const absSource = path.resolve(sourcePath);
+            fs.symlinkSync(absSource, targetPath);
+          } else {
+            fs.copyFileSync(sourcePath, targetPath);
+          }
+
+          store.recordAction('move', name || fileName, {
+            from: sourcePath,
+            to: targetPath,
+            method: method || 'copy',
+          });
+
+          rescan();
+          return send(200, { ok: true, targetPath, method: method || 'copy' });
+        } catch (err) {
+          return send(500, { ok: false, error: err.message });
+        }
+      });
+    }
+
     // ─── MCP Server Inspection ─────────────────────────
 
     // GET /api/mcp/:name/config — get MCP server config

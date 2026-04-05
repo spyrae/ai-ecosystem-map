@@ -1,10 +1,20 @@
 # AI Ecosystem Map
 
+[![npm version](https://img.shields.io/npm/v/ai-ecosystem-map.svg)](https://www.npmjs.com/package/ai-ecosystem-map)
+[![CI](https://github.com/spyrae/ai-ecosystem-map/actions/workflows/ci.yml/badge.svg)](https://github.com/spyrae/ai-ecosystem-map/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+
 Interactive visual control plane for your AI coding ecosystem. Auto-discovers skills, agents, MCP servers, rules, and instructions from **all major AI coding tools** — with real-time sync, multi-project management, and remote server support.
 
 <p align="center">
   <strong>Map</strong> · <strong>Connect</strong> · <strong>Sync</strong> — across all your AI tools and servers
 </p>
+
+<!-- TODO: Add screenshots after first release
+<p align="center">
+  <img src="docs/screenshot-map.png" alt="Ecosystem Map" width="800">
+</p>
+-->
 
 ## Supported Tools
 

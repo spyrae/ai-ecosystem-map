@@ -1,3 +1,4 @@
+import { useDraggable } from '@dnd-kit/core';
 import type { Asset } from '../types';
 import { ProviderBadge } from './ProviderBadge';
 
@@ -20,6 +21,11 @@ interface AssetCardProps {
 }
 
 export function AssetCard({ asset, usedBy = [], onConnect, onNavigate, onClick, highlight }: AssetCardProps) {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: `asset-${asset.type}-${asset.name}`,
+    data: { asset },
+  });
+
   const typeInline = asset.isOrchestrator
     ? TYPE_INLINE.agent
     : TYPE_INLINE[asset.type] || TYPE_INLINE.skill;
@@ -27,11 +33,14 @@ export function AssetCard({ asset, usedBy = [], onConnect, onNavigate, onClick, 
 
   return (
     <div
+      ref={setNodeRef}
+      {...listeners}
+      {...attributes}
       id={`card-${asset.name}`}
       onClick={() => onClick?.(asset)}
       className={`card-glow group relative cursor-pointer rounded-xl border border-[hsl(240,5%,16%)] p-5 transition-all ${
         asset.isOrchestrator ? 'border-l-2 border-l-[hsl(263,70%,58%)]' : ''
-      } ${highlight ? 'shadow-[0_0_0_1px_rgba(59,130,246,0.3)]' : ''}`}
+      } ${highlight ? 'shadow-[0_0_0_1px_rgba(59,130,246,0.3)]' : ''} ${isDragging ? 'opacity-30' : ''}`}
       style={{
         backgroundImage: 'linear-gradient(180deg, hsl(240 5% 9%) 0%, hsl(240 5% 7.5%) 100%)',
         boxShadow: highlight

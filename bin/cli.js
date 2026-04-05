@@ -97,8 +97,10 @@ async function main() {
     ? path.resolve(opts.claudeDir)
     : path.join(HOME, '.claude');
 
-  if (!fs.existsSync(claudeDir)) {
-    console.error(`\n  Error: .claude/ directory not found at ${claudeDir}`);
+  const hasClaudeDir = fs.existsSync(claudeDir);
+
+  if (!hasClaudeDir && opts.command === 'scan') {
+    console.error(`\n  No AI tooling configs found at ${claudeDir}`);
     console.error(`  Use --dir to specify a custom path.\n`);
     process.exit(1);
   }
@@ -140,7 +142,13 @@ async function main() {
 
   // === AGENT MODE (default) ===
   console.log(`\n  AI Ecosystem Map v${VERSION}`);
-  console.log(`  Scanning ${claudeDir}...`);
+
+  if (!hasClaudeDir) {
+    console.log(`  No AI tooling detected yet — starting with empty dashboard.`);
+    console.log(`  Install Claude Code, Codex, Gemini CLI, Cursor, or Windsurf to see your ecosystem.\n`);
+  } else {
+    console.log(`  Scanning ${claudeDir}...`);
+  }
 
   const { startServer } = require('../agent/server');
   const server = await startServer({
@@ -172,6 +180,15 @@ async function main() {
 }
 
 main().catch(err => {
-  console.error('Error:', err.message);
+  if (err.message && err.message.includes('better-sqlite3')) {
+    console.error(`\n  Error: Native module 'better-sqlite3' failed to load.`);
+    console.error(`  Fix: npm rebuild better-sqlite3`);
+    console.error(`  Or install build tools: xcode-select --install (macOS) / apt install build-essential python3 (Linux)\n`);
+  } else if (err.message && err.message.includes('ssh2')) {
+    console.error(`\n  Error: Native module 'ssh2' failed to load.`);
+    console.error(`  Fix: npm rebuild ssh2\n`);
+  } else {
+    console.error(`\n  Error: ${err.message}\n`);
+  }
   process.exit(1);
 });

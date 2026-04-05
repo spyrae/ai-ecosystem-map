@@ -1,6 +1,11 @@
 'use strict';
 
-const { Client } = require('ssh2');
+let Client;
+try {
+  Client = require('ssh2').Client;
+} catch {
+  Client = null;
+}
 const fs = require('fs');
 const path = require('path');
 const store = require('./store');
@@ -15,6 +20,10 @@ const pool = new Map(); // envId → { client, ready }
  */
 function sshConnect(env) {
   return new Promise((resolve, reject) => {
+    if (!Client) {
+      return reject(new Error('SSH not available: ssh2 module failed to load. Run "npm rebuild ssh2".'));
+    }
+
     if (pool.has(env.id) && pool.get(env.id).ready) {
       return resolve(pool.get(env.id).client);
     }

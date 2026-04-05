@@ -1,4 +1,4 @@
-import type { Asset, ProviderStat, Stats, HistoryEntry, Project, ProjectAsset, Environment, DiffResult } from '../types';
+import type { Asset, ProviderStat, Stats, HistoryEntry, Project, ProjectAsset, Environment, DiffResult, McpTool, RunningAgent } from '../types';
 
 const BASE = '/api';
 
@@ -100,6 +100,17 @@ export async function fetchProjectAssets(projectPath: string) {
   );
 }
 
+// Move/Copy
+export async function moveAsset(data: {
+  sourcePath: string;
+  name: string;
+  type: string;
+  targetProjectPath: string;
+  method: 'symlink' | 'copy';
+}) {
+  return post<{ ok: boolean; targetPath?: string; method?: string; error?: string }>('/assets/move', data);
+}
+
 // CRUD
 export async function fetchAssetContent(name: string) {
   return get<{ ok: boolean; content: string; filePath: string }>(
@@ -121,6 +132,7 @@ export async function createAsset(data: {
   type: string;
   content?: string;
   provider?: string;
+  scope?: string;
   config?: Record<string, unknown>;
 }) {
   return post<{ ok: boolean; filePath?: string; error?: string }>('/assets/create', data);

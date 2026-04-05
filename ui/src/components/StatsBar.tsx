@@ -1,4 +1,30 @@
+import { useEffect, useRef, useState } from 'react';
 import type { Stats } from '../types';
+
+function AnimatedNumber({ value, duration = 600 }: { value: number; duration?: number }) {
+  const [display, setDisplay] = useState(0);
+  const prevRef = useRef(0);
+
+  useEffect(() => {
+    const from = prevRef.current;
+    const to = value;
+    if (from === to) return;
+
+    const start = performance.now();
+    function tick(now: number) {
+      const elapsed = now - start;
+      const progress = Math.min(elapsed / duration, 1);
+      // Ease out cubic
+      const eased = 1 - Math.pow(1 - progress, 3);
+      setDisplay(Math.round(from + (to - from) * eased));
+      if (progress < 1) requestAnimationFrame(tick);
+      else prevRef.current = to;
+    }
+    requestAnimationFrame(tick);
+  }, [value, duration]);
+
+  return <>{display}</>;
+}
 
 interface StatsBarProps {
   stats: Stats | null;
@@ -19,7 +45,9 @@ export function StatsBar({ stats }: StatsBarProps) {
     <div className="flex gap-6 border-b border-border px-6 py-3 shrink-0">
       {items.map((item) => (
         <div key={item.label} className="flex items-baseline gap-2">
-          <span className={`text-lg font-semibold ${item.color}`}>{item.value}</span>
+          <span className={`text-lg font-semibold tabular-nums ${item.color}`}>
+            <AnimatedNumber value={item.value} />
+          </span>
           <span className="text-xs text-muted">{item.label}</span>
         </div>
       ))}
