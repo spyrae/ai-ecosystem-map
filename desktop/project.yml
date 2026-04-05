@@ -1,0 +1,42 @@
+name: AEM
+options:
+  bundleIdPrefix: dev.spyrae
+  deploymentTarget:
+    macOS: "14.0"
+  xcodeVersion: "16.0"
+  minimumXcodeGenVersion: "2.38"
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    ENABLE_HARDENED_RUNTIME: YES
+    CODE_SIGN_IDENTITY: "-"
+    PRODUCT_NAME: AEM
+
+targets:
+  AEM:
+    type: application
+    platform: macOS
+    sources:
+      - path: AEM
+    settings:
+      base:
+        INFOPLIST_FILE: AEM/Resources/Info.plist
+        CODE_SIGN_ENTITLEMENTS: AEM/Resources/AEM.entitlements
+        PRODUCT_BUNDLE_IDENTIFIER: dev.spyrae.aem
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        GENERATE_INFOPLIST_FILE: NO
+    dependencies:
+      - package: Sparkle
+    entitlements:
+      path: AEM/Resources/AEM.entitlements
+      properties:
+        com.apple.security.app-sandbox: false
+
+packages:
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: "2.6.0"

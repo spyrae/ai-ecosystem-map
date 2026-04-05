@@ -275,10 +275,16 @@ function getConnections(sourcePath, itemType, itemName, projectRoot) {
     }
 
     const stat = fs.lstatSync(targetPath);
+    const isSymlink = stat.isSymbolicLink();
+
+    // Detect if this is the source (original file, not a symlink)
+    const isSource = !isSymlink && sourcePath && path.resolve(targetPath) === path.resolve(sourcePath);
+
     connections[tool] = {
       supported: true,
       connected: true,
-      isSymlink: stat.isSymbolicLink(),
+      isSymlink,
+      isSource: isSource || false,
       targetPath,
     };
   }

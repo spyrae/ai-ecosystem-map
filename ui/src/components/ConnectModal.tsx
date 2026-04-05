@@ -8,7 +8,7 @@ interface ConnectModalProps {
   onClose: () => void;
 }
 
-type ConnectionState = Record<string, { connected: boolean; method?: string; loading?: boolean }>;
+type ConnectionState = Record<string, { connected: boolean; method?: string; loading?: boolean; isSource?: boolean; isSymlink?: boolean; supported?: boolean }>;
 
 const PROVIDER_COLORS: Record<string, string> = {
   claude: '#f0883e',
@@ -49,7 +49,7 @@ export function ConnectModal({ asset, onClose }: ConnectModalProps) {
 
   const handleToggle = async (tool: string) => {
     const conn = connections[tool];
-    if (!conn || conn.loading) return;
+    if (!conn || conn.loading || conn.isSource) return;
 
     setConnections((prev) => ({ ...prev, [tool]: { ...prev[tool], loading: true } }));
 
@@ -91,7 +91,9 @@ export function ConnectModal({ asset, onClose }: ConnectModalProps) {
           <div className="space-y-1.5">
             {TOOL_ORDER.map((tool) => {
               const conn = connections[tool];
-              if (!conn) return null; // tool not installed
+              if (!conn || conn.supported === false) return null;
+
+              const isSource = conn.isSource === true;
 
               return (
                 <div
@@ -108,22 +110,28 @@ export function ConnectModal({ asset, onClose }: ConnectModalProps) {
                     <div>
                       <div className="text-sm font-medium">{PROVIDER_LABELS[tool] || tool}</div>
                       <div className="text-[11px] text-muted">
-                        {conn.connected ? `Connected via ${conn.method || 'symlink'}` : 'Not connected'}
+                        {isSource ? 'Source (original file)' : conn.connected ? `Connected via ${conn.isSymlink ? 'symlink' : 'copy'}` : 'Not connected'}
                       </div>
                     </div>
                   </div>
 
-                  <button
-                    onClick={() => handleToggle(tool)}
-                    disabled={conn.loading}
-                    className={`px-3.5 py-1.5 rounded-md border text-xs font-medium transition-all ${
-                      conn.connected
-                        ? 'border-green text-green hover:border-red hover:text-red'
-                        : 'border-border text-text hover:border-accent hover:text-accent'
-                    } ${conn.loading ? 'opacity-40 cursor-default' : ''}`}
-                  >
-                    {conn.loading ? '...' : conn.connected ? 'Connected' : 'Connect'}
-                  </button>
+                  {isSource ? (
+                    <span className="px-3.5 py-1.5 rounded-md border border-accent/30 text-accent text-xs font-medium">
+                      Source
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => handleToggle(tool)}
+                      disabled={conn.loading}
+                      className={`px-3.5 py-1.5 rounded-md border text-xs font-medium transition-all ${
+                        conn.connected
+                          ? 'border-green text-green hover:border-red hover:text-red'
+                          : 'border-border text-text hover:border-accent hover:text-accent'
+                      } ${conn.loading ? 'opacity-40 cursor-default' : ''}`}
+                    >
+                      {conn.loading ? '...' : conn.connected ? 'Disconnect' : 'Connect'}
+                    </button>
+                  )}
                 </div>
               );
             })}

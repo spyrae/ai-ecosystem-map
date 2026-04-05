@@ -15,6 +15,7 @@ import { ProjectsView } from './components/ProjectsView';
 import { ServersView } from './components/ServersView';
 import { RunningAgentsView } from './components/RunningAgentsView';
 import { DragOverlay } from './components/DragOverlay';
+import { AEMLogo } from './components/AEMLogo';
 
 type View = 'map' | 'projects' | 'agents' | 'servers';
 
@@ -216,9 +217,12 @@ export default function App() {
     <div className="flex flex-col h-screen bg-bg">
       {/* Header — row 1: logo + nav */}
       <header className="flex items-center justify-between border-b border-border px-6 py-3 shrink-0">
-        <h1 className="text-gradient-primary text-lg font-semibold tracking-tight">
-          AI Ecosystem Map
-        </h1>
+        <div className="flex items-center gap-3">
+          <AEMLogo height={18} mono className="text-white" />
+          <h1 className="text-gradient-primary text-lg font-semibold tracking-tight">
+            AI Ecosystem Map
+          </h1>
+        </div>
         <nav className="flex gap-1">
           {NAV_ITEMS.map((item) => (
             <button
@@ -344,12 +348,13 @@ export default function App() {
       )}
 
       {/* Footer */}
-      <footer className="text-center py-2.5 border-t border-border text-[11px] text-muted shrink-0">
+      <footer className="flex items-center justify-center gap-3 py-2.5 border-t border-border text-[11px] text-muted shrink-0">
+        <AEMLogo height={12} />
         <a href="https://github.com/spyrae/ai-ecosystem-map" target="_blank" rel="noopener" className="text-accent/60 hover:text-accent transition-colors">
           ai-ecosystem-map
         </a>
-        <span className="mx-1.5 opacity-30">·</span>
-        Claude · Codex · Gemini · Cursor · Windsurf · Copilot
+        <span className="opacity-30">·</span>
+        <span>Claude · Codex · Gemini · Cursor · Windsurf · Copilot</span>
       </footer>
     </div>
   );
