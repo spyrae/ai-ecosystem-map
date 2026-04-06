@@ -2,19 +2,22 @@
 
 [![npm version](https://img.shields.io/npm/v/ai-ecosystem-map.svg)](https://www.npmjs.com/package/ai-ecosystem-map)
 [![CI](https://github.com/spyrae/ai-ecosystem-map/actions/workflows/ci.yml/badge.svg)](https://github.com/spyrae/ai-ecosystem-map/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![License: BSL 2.0](https://img.shields.io/badge/License-BSL_2.0-orange.svg)](LICENSE)
 
-Interactive visual control plane for your AI coding ecosystem. Auto-discovers skills, agents, MCP servers, rules, and instructions from **all major AI coding tools** — with real-time sync, multi-project management, and remote server support.
+Visual control plane for your AI coding ecosystem. Auto-discovers skills, agents, MCP servers, rules, and instructions from **7 AI coding tools** — with real-time sync, connect/disconnect, and a native macOS app.
 
 <p align="center">
-  <strong>Map</strong> · <strong>Connect</strong> · <strong>Sync</strong> — across all your AI tools and servers
+  <img src="docs/screenshot-macos.png" alt="AEM — macOS App" width="800">
 </p>
 
-<!-- TODO: Add screenshots after first release
-<p align="center">
-  <img src="docs/screenshot-map.png" alt="Ecosystem Map" width="800">
-</p>
--->
+## Two Ways to Use
+
+| | **macOS App** | **CLI / Web UI** |
+|---|---|---|
+| **Install** | [Download DMG](https://github.com/spyrae/ai-ecosystem-map/releases/latest) | `npx ai-ecosystem-map` |
+| **Best for** | Local daily use | VPS, remote, headless |
+| **UI** | Native SwiftUI | React SPA in browser |
+| **Agent** | Auto-launches on start | Manual `aem` command |
 
 ## Supported Tools
 
@@ -33,36 +36,48 @@ Interactive visual control plane for your AI coding ecosystem. Auto-discovers sk
 ### Ecosystem Map
 - **Multi-tool discovery** — scans configs from 7 AI coding assistants
 - **Provider badges** — see which AI tools can use each asset
-- **Smart search** — find tools by name, description, or tags
-- **Dependency graph** — "uses" and "used by" relationships
+- **Smart search** — find assets by name, description, or tags
 - **Auto-categorization** — Development, DevOps, Security, Content, SEO, UX, etc.
-- **Connect/Disconnect** — share skills between AI tools via symlinks or config editing
+- **Connect/Disconnect** — share skills between AI tools via symlinks
+- **Source protection** — original files marked as "source", can't accidentally disconnect
+
+### CRUD Operations
+- **Create** assets (skills, agents, rules) with AI generation
+- **Edit** file content inline with save/revert
+- **Delete** with confirmation
+- **Move/Copy** assets between projects
 
 ### Project Management
 - **Auto-discovery** — scans directories for projects with AI tooling
-- **Project-level assets** — sees local `.claude/commands/`, `.cursor/rules/`, project `.mcp.json`
+- **Project-level assets** — local `.claude/commands/`, `.cursor/rules/`, project `.mcp.json`
 - **Provider detection** — shows which AI tools each project uses
 
 ### Remote Servers
-- **SSH connection** — add VPS/remote servers by SSH credentials
+- **SSH connection** — add VPS/remote servers
 - **Remote scanning** — discovers AI assets on remote machines
-- **Diff view** — compare local vs remote: only local, only remote, shared
-- **Push/Pull** — sync skills and agents between local and remote via SCP
+- **Diff view** — compare local vs remote
+- **Push/Pull** — sync skills and agents via SCP
 
 ### Real-Time
-- **File watcher** — detects changes in config directories instantly
-- **WebSocket sync** — UI updates live when files change on disk
+- **File watcher** — detects config changes instantly
+- **WebSocket sync** — UI updates live
 - **SQLite persistence** — state survives restarts
 
 ## Quick Start
+
+### macOS App
+
+Download from [GitHub Releases](https://github.com/spyrae/ai-ecosystem-map/releases/latest), open the DMG, drag to Applications. Requires Node.js installed (`brew install node`).
+
+### CLI
 
 ```bash
 npx ai-ecosystem-map
 ```
 
-Opens the web UI at `http://localhost:3000` with your full ecosystem map.
+Opens the web UI at `http://localhost:3000`.
 
-## Install Globally
+### Install Globally
 
 ```bash
 npm install -g ai-ecosystem-map
@@ -81,12 +96,9 @@ aem --no-open              # Don't auto-open browser
 # Static HTML (one-shot)
 aem scan                   # Print summary to stdout
 aem scan -o map.html       # Generate self-contained HTML file
-
-# Options
-aem -d /path/to/.claude    # Custom config directory
 ```
 
-### VPS / Remote Usage
+### VPS / Remote
 
 ```bash
 # On your VPS:
@@ -97,29 +109,15 @@ ssh -L 3000:localhost:3000 user@your-vps
 open http://localhost:3000
 ```
 
-Or generate a static file:
-```bash
-aem scan -o /tmp/ecosystem.html --no-open
-```
+## Keyboard Shortcuts
 
-## What It Discovers
-
-| Type | Source | Description |
-|------|--------|-------------|
-| **Skills** | `.claude/commands/*.md` | Slash commands with YAML frontmatter |
-| **Agents** | `.claude/agents/*.md` | Custom agent definitions |
-| **MCP Servers** | `.mcp.json` | Model Context Protocol servers |
-| **Instructions** | `AGENTS.md`, `GEMINI.md`, etc. | Cross-IDE instruction files |
-| **Rules** | `.cursor/rules/`, `.windsurf/rules/` | IDE-specific rules |
-
-### Provider Detection
-
-Each card shows which AI tools can access it:
-
-- Skills in `.claude/commands/` → Claude + Codex + Gemini (shared format)
-- `AGENTS.md` → Codex + Copilot + Cursor + Windsurf
-- `.cursor/rules/` → Cursor only
-- MCP servers → configured per tool via `.mcp.json`
+| Shortcut | Action |
+|----------|--------|
+| `Cmd+F` | Focus search |
+| `Cmd+N` | Create new asset |
+| `Cmd+R` | Rescan ecosystem |
+| `Cmd+1-4` | Switch views (Map/Projects/Agents/Servers) |
+| `Escape` | Close panel / clear search |
 
 ## Architecture
 
@@ -136,40 +134,37 @@ ai-ecosystem-map/
 │   ├── remote.js       # SSH connection & remote scanning
 │   ├── watcher/        # File system watcher
 │   └── store/          # SQLite persistent state
+├── desktop/            # macOS SwiftUI app (Xcode project)
 ├── ui/                 # React + TypeScript + Tailwind
 │   └── dist/           # Built UI (served by agent)
 └── template/           # Static HTML fallback
 ```
 
-### API
+## API
 
 All endpoints under `/api/`:
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/assets` | GET | List assets (filters: type, provider, category, q) |
-| `/api/stats` | GET | Summary statistics |
-| `/api/providers` | GET | Provider breakdown |
-| `/api/categories` | GET | Category counts |
+| `/api/assets/create` | POST | Create new asset |
+| `/api/assets/:name/content` | GET/PUT | Read/update asset content |
 | `/api/connect` | POST | Connect asset to a tool |
 | `/api/disconnect` | POST | Disconnect asset from a tool |
 | `/api/projects` | GET | List discovered projects |
 | `/api/projects/discover` | POST | Scan directories for projects |
 | `/api/servers` | GET | List environments (local + remote) |
-| `/api/servers/add` | POST | Add remote server |
-| `/api/servers/:id/scan` | POST | Scan remote for assets |
 | `/api/servers/:id/diff` | GET | Diff local vs remote |
-| `/api/servers/:id/push` | POST | Push asset to remote |
-| `/api/servers/:id/pull` | POST | Pull asset from remote |
 | `/api/rescan` | POST | Trigger full rescan |
+| `/api/generate` | POST | AI-generate asset content |
 
 WebSocket at `/ws` — pushes `assets:updated` events on file changes.
 
 ## Requirements
 
-- Node.js >= 18
+- **macOS App**: macOS 14+, Node.js >= 18
+- **CLI**: Node.js >= 18, any OS
 - At least one AI coding tool configured
-- SSH key for remote server features (optional)
 
 ## License
 
