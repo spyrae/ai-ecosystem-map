@@ -299,8 +299,12 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				CODE_SIGN_IDENTITY = "Developer ID Application";
+				CODE_SIGN_STYLE = Manual;
+				DEVELOPMENT_TEAM = NUUVL88N9K;
 				MARKETING_VERSION = 1.0.0;
-				PRODUCT_BUNDLE_IDENTIFIER = dev.spyrae.aem;
+				PRODUCT_BUNDLE_IDENTIFIER = pro.futurecraft.aem;
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;
 			};
 			name = Release;
@@ -310,8 +314,11 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = AEM/Resources/AEM.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = NUUVL88N9K;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = AEM/Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -319,7 +326,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0.0;
-				PRODUCT_BUNDLE_IDENTIFIER = dev.spyrae.aem;
+				PRODUCT_BUNDLE_IDENTIFIER = pro.futurecraft.aem;
 				SDKROOT = macosx;
 			};
 			name = Debug;

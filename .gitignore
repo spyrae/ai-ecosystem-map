@@ -5,3 +5,4 @@ ui/node_modules/
 Thumbs.db
 .mcp.json
 *.db
+*.dmg
