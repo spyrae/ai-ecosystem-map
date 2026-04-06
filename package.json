@@ -39,7 +39,7 @@
     "remote"
   ],
   "author": "Roman Belov",
-  "license": "MIT WITH Commons-Clause",
+  "license": "BSL-2.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/spyrae/ai-ecosystem-map"

@@ -173,4 +173,4 @@ WebSocket at `/ws` — pushes `assets:updated` events on file changes.
 
 ## License
 
-MIT + [Commons Clause](https://commonsclause.com/) — free to use, modify, and distribute. Cannot be sold as a commercial product or service.
+[BSL 2.0](LICENSE) — free to use, modify, and self-host. Cannot be sold as a competing product. Converts to MIT on 2030-04-06.

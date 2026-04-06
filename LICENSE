@@ -1,28 +1,63 @@
-Commons Clause License Condition v1.0
+Business Source License 2.0
 
-The Software is provided to you by the Licensor under the License,
-as defined below, subject to the following condition.
-
-Without limiting other conditions in the License, the grant of rights
-under the License will not include, and the License does not grant to
-you, the right to Sell the Software.
-
-For purposes of the foregoing, "Sell" means practicing any or all of
-the rights granted to you under the License to provide to third parties,
-for a fee or other consideration (including without limitation fees for
-hosting or consulting/support services related to the Software), a
-product or service whose value derives, entirely or substantially,
-from the functionality of the Software. Any license notice or attribution
-required by the License must also include this Commons Clause License
-Condition notice.
-
-Software: AI Ecosystem Map (AEM)
-License: MIT
 Licensor: Roman Belov
+Licensed Work: AI Ecosystem Map (AEM)
+Version: 1.0
+
+Terms
+
+The Licensor hereby grants you the right to copy, modify, create derivative
+works, redistribute, and make non-production use of the Licensed Work.
+
+Additional Use Grant:
+
+You may use the Licensed Work for any purpose, including production use,
+provided that you do not use the Licensed Work to offer a commercial product
+or service that competes with the Licensed Work.
+
+"Compete" means offering a product or service whose primary purpose is
+substantially similar to the Licensed Work — specifically, discovering,
+visualizing, connecting, or managing AI coding tool configurations
+(skills, agents, MCP servers, rules, instructions) across multiple
+AI assistants.
+
+For clarity, the following uses are explicitly permitted:
+
+- Personal and internal business use (any scale)
+- Using AEM as part of your development workflow
+- Modifying AEM for your own needs
+- Integrating AEM into your internal toolchain
+- Contributing improvements back to the project
+- Using AEM in educational and research settings
+
+The following uses require a separate commercial license from the Licensor:
+
+- Selling AEM or a substantially similar product
+- Offering AEM as a hosted/managed service for third parties
+- Bundling AEM into a commercial product for sale
+
+Change Date: 2030-04-06
+
+Change License: MIT
+
+On the Change Date, or the fourth anniversary of the first publicly
+available distribution of a specific version of the Licensed Work under
+this License, whichever comes first, the Licensor hereby grants you rights
+under the terms of the MIT License, and the rights granted under the
+Business Source License 2.0 are hereby terminated.
+
+Notice
+
+The Business Source License (this document, or the "License") is not an
+Open Source license. However, the Licensed Work will eventually be made
+available under an Open Source license, as stated in this License.
+
+For more information on the Business Source License, please visit:
+https://mariadb.com/bsl11/
 
 ---
 
-MIT License
+MIT License (effective after Change Date)
 
 Copyright (c) 2026 Roman Belov
 
