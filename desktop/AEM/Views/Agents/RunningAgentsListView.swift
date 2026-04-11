@@ -31,6 +31,8 @@ struct RunningAgentsListView: View {
             } else {
                 List {
                     ForEach(store.runningAgents) { agent in
+                        let topologyNode = store.runningAgentTopologyNode(agentId: agent.id)
+                        let environmentNode = store.runningAgentEnvironmentNode(agentId: agent.id)
                         DisclosureGroup {
                             if let tools = expandedTools[agent.id] {
                                 ForEach(tools) { tool in
@@ -57,6 +59,12 @@ struct RunningAgentsListView: View {
                                 VStack(alignment: .leading) {
                                     Text(agent.name).font(.body.weight(.medium))
                                     Text(agent.url).font(.caption).foregroundStyle(.secondary)
+                                    if let summary = runningAgentSummary(environmentNode: environmentNode, topologyNode: topologyNode) {
+                                        Text(summary)
+                                            .font(.caption2)
+                                            .foregroundStyle(.tertiary)
+                                            .lineLimit(1)
+                                    }
                                 }
                                 Spacer()
                                 if let tools = expandedTools[agent.id] {
@@ -89,6 +97,17 @@ struct RunningAgentsListView: View {
             AddRunningAgentSheet()
         }
     }
+
+    private func runningAgentSummary(environmentNode: TopologyNode?, topologyNode: TopologyNode?) -> String? {
+        var items: [String] = []
+        if let environmentNode {
+            items.append("Runs on \(environmentNode.label)")
+        }
+        if let badges = topologyNode?.badges, !badges.isEmpty {
+            items.append(badges.joined(separator: " · "))
+        }
+        return items.isEmpty ? nil : items.joined(separator: " · ")
+    }
 }
 
 // MARK: - Add Running Agent Sheet
@@ -101,8 +120,6 @@ struct AddRunningAgentSheet: View {
     @State private var name = ""
     @State private var url = "http://localhost:"
     @State private var description = ""
-    @State private var protocolType = "mcp"
-
     var body: some View {
         VStack(spacing: 16) {
             Text("Add Running Agent").font(.headline)
@@ -111,11 +128,7 @@ struct AddRunningAgentSheet: View {
                 TextField("Name", text: $name)
                 TextField("URL", text: $url)
                 TextField("Description", text: $description)
-                Picker("Protocol", selection: $protocolType) {
-                    Text("MCP").tag("mcp")
-                    Text("HTTP").tag("http")
-                    Text("A2A").tag("a2a")
-                }
+                LabeledContent("Protocol", value: "MCP")
             }
             .formStyle(.grouped)
 
@@ -127,7 +140,7 @@ struct AddRunningAgentSheet: View {
                     let store = store
                     Task {
                         _ = try? await api.addRunningAgent(
-                            name: name, url: url, description: description, protocol: protocolType
+                            name: name, url: url, description: description, protocol: "mcp"
                         )
                         await store.loadRunningAgents(api: api)
                         dismiss()

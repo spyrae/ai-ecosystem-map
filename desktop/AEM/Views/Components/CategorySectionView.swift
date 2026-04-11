@@ -4,6 +4,9 @@ struct CategorySectionView: View {
     let category: String
     let assets: [Asset]
     let usedByMap: [String: [String]]
+    var selectionMode = false
+    var selectedAssetIDs: Set<String> = []
+    var onToggleSelection: ((Asset) -> Void)? = nil
 
     @State private var isExpanded = true
 
@@ -17,7 +20,10 @@ struct CategorySectionView: View {
                 ForEach(assets) { asset in
                     AssetCardView(
                         asset: asset,
-                        usedBy: usedByMap[asset.name] ?? []
+                        usedBy: usedByMap[asset.name] ?? [],
+                        selectionMode: selectionMode,
+                        selected: selectedAssetIDs.contains(asset.id),
+                        onToggleSelection: onToggleSelection
                     )
                 }
             }

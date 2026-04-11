@@ -1,5 +1,7 @@
 'use strict';
 
+const crypto = require('crypto');
+
 /**
  * Keyword-based auto-categorization.
  * Maps items to categories based on name and description patterns.
@@ -131,95 +133,106 @@ function generateTags(item) {
   return tags.slice(0, 5); // Max 5 tags
 }
 
+function stableAssetId(type, name) {
+  return crypto.createHash('sha1').update(`${type}:${name}`).digest('hex').slice(0, 24);
+}
+
+function createLocations(item) {
+  if (item.locations && typeof item.locations === 'object') {
+    return { ...item.locations };
+  }
+  if (!item.filePath) return {};
+  return Object.fromEntries((item.providers || []).map((provider) => [provider, item.filePath]));
+}
+
+function mergeAsset(target, item, tags, deps) {
+  target.providers = [...new Set([...(target.providers || []), ...(item.providers || [])])];
+  target.tags = [...new Set([...(target.tags || []), ...tags])].slice(0, 8);
+  target.deps = [...new Set([...(target.deps || []), ...deps])];
+  target.keywords = `${target.keywords || ''} ${item.name} ${item.desc || ''}`.trim().toLowerCase().substring(0, 400);
+  target.locations = { ...(target.locations || {}), ...createLocations(item) };
+
+  if (!target.desc && item.desc) target.desc = (item.desc || '').substring(0, 200);
+  if (!target.filePath && item.filePath) target.filePath = item.filePath;
+  if (!target.rawConfig && item.rawConfig) target.rawConfig = item.rawConfig;
+
+  if (item.isOrchestrator) {
+    target.isOrchestrator = true;
+    target.cat = 'Orchestrators';
+  }
+}
+
 /**
  * Main categorization pipeline
  */
 function categorize(raw) {
-  const allItems = [];
+  const merged = new Map();
+
+  function pushItem(item) {
+    const key = `${item.type}:${item.name}`;
+    const tags = generateTags(item);
+    const deps = item.type === 'skill' ? extractDeps(item.desc || '') : [];
+    const cat = item.type === 'instruction'
+      ? 'Instructions'
+      : item.type === 'rule'
+        ? 'Rules'
+        : item.type === 'mcp'
+          ? 'MCP Servers'
+          : item.type === 'agent'
+            ? 'Agents'
+            : item.name.startsWith('gsd:')
+              ? 'GSD System'
+              : categorizeItem(item);
+    const entry = {
+      id: stableAssetId(item.type, item.name),
+      name: item.name,
+      type: item.type,
+      cat: item.type === 'skill' && isOrchestrator(item) ? 'Orchestrators' : cat,
+      desc: (item.desc || '').substring(0, 200),
+      filePath: item.filePath || null,
+      tags,
+      isOrchestrator: item.type === 'skill' ? isOrchestrator(item) : false,
+      deps,
+      providers: [...(item.providers || [])],
+      keywords: `${item.name} ${item.desc || ''}`.toLowerCase().substring(0, 400),
+      locations: createLocations(item),
+      rawConfig: item.rawConfig || null,
+    };
+
+    if (merged.has(key)) {
+      mergeAsset(merged.get(key), item, tags, deps);
+      return;
+    }
+
+    merged.set(key, entry);
+  }
 
   // Process skills
   for (const skill of raw.skills) {
-    const cat = skill.name.startsWith('gsd:') ? 'GSD System' : categorizeItem(skill);
-    const orch = isOrchestrator(skill);
-    allItems.push({
-      name: skill.name,
-      type: skill.type,
-      cat: orch ? 'Orchestrators' : cat,
-      desc: (skill.desc || '').substring(0, 200),
-      filePath: skill.filePath || null,
-      tags: generateTags(skill),
-      isOrchestrator: orch,
-      deps: extractDeps(skill.desc || ''),
-      providers: skill.providers || [],
-      keywords: `${skill.name} ${skill.desc}`.toLowerCase().substring(0, 200),
-    });
+    pushItem(skill);
   }
 
   // Process agents
   for (const agent of raw.agents) {
-    allItems.push({
-      name: agent.name,
-      type: 'agent',
-      cat: 'Agents',
-      desc: (agent.desc || '').substring(0, 200),
-      filePath: agent.filePath || null,
-      tags: generateTags(agent),
-      isOrchestrator: false,
-      deps: [],
-      providers: agent.providers || [],
-      keywords: `${agent.name} ${agent.desc}`.toLowerCase().substring(0, 200),
-    });
+    pushItem({ ...agent, type: 'agent' });
   }
 
   // Process instructions (AGENTS.md, GEMINI.md, etc.)
   for (const instr of (raw.instructions || [])) {
-    allItems.push({
-      name: instr.name,
-      type: 'instruction',
-      cat: 'Instructions',
-      desc: (instr.desc || '').substring(0, 200),
-      filePath: instr.filePath || null,
-      tags: generateTags(instr),
-      isOrchestrator: false,
-      deps: [],
-      providers: instr.providers || [],
-      keywords: `${instr.name} ${instr.desc}`.toLowerCase().substring(0, 200),
-    });
+    pushItem({ ...instr, type: 'instruction' });
   }
 
   // Process rules (Cursor, Windsurf)
   for (const rule of (raw.rules || [])) {
-    allItems.push({
-      name: rule.name,
-      type: 'rule',
-      cat: 'Rules',
-      desc: (rule.desc || '').substring(0, 200),
-      filePath: rule.filePath || null,
-      tags: generateTags(rule),
-      isOrchestrator: false,
-      deps: [],
-      providers: rule.providers || [],
-      keywords: `${rule.name} ${rule.desc}`.toLowerCase().substring(0, 200),
-    });
+    pushItem({ ...rule, type: 'rule' });
   }
 
   // Process MCP servers
   for (const mcp of raw.mcpServers) {
-    allItems.push({
-      name: mcp.name,
-      type: 'mcp',
-      cat: 'MCP Servers',
-      desc: (mcp.desc || '').substring(0, 200),
-      filePath: null,
-      tags: generateTags(mcp),
-      isOrchestrator: false,
-      deps: [],
-      providers: mcp.providers || [],
-      keywords: `${mcp.name} ${mcp.desc}`.toLowerCase().substring(0, 200),
-    });
+    pushItem({ ...mcp, type: 'mcp' });
   }
 
-  return allItems;
+  return [...merged.values()].sort((a, b) => a.cat.localeCompare(b.cat) || a.name.localeCompare(b.name));
 }
 
 module.exports = { categorize };

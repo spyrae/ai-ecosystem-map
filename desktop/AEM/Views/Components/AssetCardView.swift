@@ -3,6 +3,9 @@ import SwiftUI
 struct AssetCardView: View {
     let asset: Asset
     let usedBy: [String]
+    var selectionMode = false
+    var selected = false
+    var onToggleSelection: ((Asset) -> Void)? = nil
 
     @Environment(EcosystemStore.self) private var store
     @State private var isHovered = false
@@ -11,6 +14,15 @@ struct AssetCardView: View {
         VStack(alignment: .leading, spacing: 8) {
             // Header: type badge + name
             HStack(spacing: 6) {
+                if selectionMode {
+                    Button {
+                        onToggleSelection?(asset)
+                    } label: {
+                        Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(selected ? Color.accentColor : Color.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
                 Image(systemName: asset.type.icon)
                     .font(.caption)
                     .foregroundStyle(typeColor)
@@ -18,6 +30,12 @@ struct AssetCardView: View {
                     .font(.system(.body, design: .monospaced, weight: .medium))
                     .lineLimit(1)
                 Spacer()
+                if let health = asset.health, health.status != "ok" {
+                    Label(health.status == "broken" ? "Broken" : "Warning", systemImage: health.status == "broken" ? "exclamationmark.octagon.fill" : "exclamationmark.triangle.fill")
+                        .font(.caption2)
+                        .foregroundStyle(health.status == "broken" ? .red : .orange)
+                        .help(health.summary)
+                }
                 if asset.isOrchestrator {
                     Image(systemName: "arrow.triangle.branch")
                         .font(.caption2)
@@ -32,6 +50,31 @@ struct AssetCardView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
+            }
+
+            if let health = asset.health, health.status != "ok" {
+                Text(health.summary)
+                    .font(.caption2)
+                    .foregroundStyle(health.status == "broken" ? .red : .orange)
+                    .lineLimit(2)
+            }
+
+            if let capabilitySummary = asset.capabilities?.summary {
+                let items = capabilitySummary.compactItems.prefix(3)
+                if !items.isEmpty {
+                    HStack(spacing: 4) {
+                        Text("Targets")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                        ForEach(Array(items), id: \.self) { item in
+                            Text(item)
+                                .font(.caption2)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
+                                .background(.quaternary, in: Capsule())
+                        }
+                    }
+                }
             }
 
             // Provider badges
@@ -96,18 +139,32 @@ struct AssetCardView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 10)
-                .stroke(isHovered ? Color.accentColor.opacity(0.3) : Color.gray.opacity(0.2), lineWidth: 1)
+                .stroke(
+                    selected
+                        ? Color.accentColor.opacity(0.8)
+                        : (isHovered ? Color.accentColor.opacity(0.3) : Color.gray.opacity(0.2)),
+                    lineWidth: selected ? 2 : 1
+                )
         )
         .onHover { isHovered = $0 }
-        .onTapGesture { store.selectedAsset = asset }
-        .contextMenu {
-            Button("Edit") { store.selectedAsset = asset }
-            Divider()
-            Button("Delete", role: .destructive) {
-                // TODO: delete confirmation
+        .onTapGesture {
+            if selectionMode {
+                onToggleSelection?(asset)
+            } else {
+                store.selectedAsset = asset
             }
         }
+        .contextMenu {
+            Button("Edit") { store.selectedAsset = asset }
+                .disabled(!asset.canEdit)
+            Divider()
+            Button("Delete", role: .destructive) {
+                store.selectedAsset = asset
+            }
+            .disabled(!asset.canDelete)
+        }
         .animation(.easeInOut(duration: 0.15), value: isHovered)
+        .animation(.easeInOut(duration: 0.15), value: selected)
     }
 
     private var typeColor: Color {

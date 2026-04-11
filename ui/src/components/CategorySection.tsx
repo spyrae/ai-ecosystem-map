@@ -29,9 +29,23 @@ interface CategorySectionProps {
   onNavigate?: (name: string) => void;
   onAssetClick?: (asset: Asset) => void;
   highlightName?: string | null;
+  selectionMode?: boolean;
+  selectedAssetIds?: Set<string>;
+  onToggleSelection?: (asset: Asset) => void;
 }
 
-export function CategorySection({ category, assets, usedByMap, onConnect, onNavigate, onAssetClick, highlightName }: CategorySectionProps) {
+export function CategorySection({
+  category,
+  assets,
+  usedByMap,
+  onConnect,
+  onNavigate,
+  onAssetClick,
+  highlightName,
+  selectionMode = false,
+  selectedAssetIds,
+  onToggleSelection,
+}: CategorySectionProps) {
   const [collapsed, setCollapsed] = useState(false);
   const colorClass = CAT_COLORS[category] || 'text-zinc-400';
 
@@ -70,6 +84,9 @@ export function CategorySection({ category, assets, usedByMap, onConnect, onNavi
                 onNavigate={onNavigate}
                 onClick={onAssetClick}
                 highlight={highlightName === asset.name}
+                selectionMode={selectionMode}
+                selected={selectedAssetIds?.has(asset.id) || false}
+                onToggleSelection={onToggleSelection}
               />
             </div>
           ))}

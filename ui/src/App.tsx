@@ -1,8 +1,9 @@
 import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { DndContext, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import type { DragStartEvent, DragEndEvent } from '@dnd-kit/core';
-import type { Asset, AssetType, Provider, Stats } from './types';
-import { fetchAssets, fetchStats, fetchCategories, rescan, connectAsset } from './lib/api';
+import { PROVIDER_LABELS, assetCanConnect, type Asset, type AssetHealthStatus, type AssetType, type HistoryEntry, type Provider, type Stats, type TopologyGraph } from './types';
+import { fetchAssets, fetchStats, fetchCategories, fetchHistory, fetchTopology, rollbackHistoryEntry, undoLastAction, rescan, connectAsset, validateBatch, connectBatch, disconnectBatch, deleteBatch } from './lib/api';
+import { buildUsedByMapFromTopology } from './lib/topology';
 import * as ws from './lib/ws';
 import { SearchBar, type SearchBarHandle } from './components/SearchBar';
 import { Sidebar } from './components/Sidebar';
@@ -16,6 +17,7 @@ import { ServersView } from './components/ServersView';
 import { RunningAgentsView } from './components/RunningAgentsView';
 import { DragOverlay } from './components/DragOverlay';
 import { AEMLogo } from './components/AEMLogo';
+import { HistoryModal } from './components/HistoryModal';
 
 type View = 'map' | 'projects' | 'agents' | 'servers';
 
@@ -23,11 +25,13 @@ export default function App() {
   const [view, setView] = useState<View>('map');
   const [assets, setAssets] = useState<Asset[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
+  const [topology, setTopology] = useState<TopologyGraph | null>(null);
   const [categories, setCategories] = useState<Record<string, number>>({});
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState<AssetType | null>(null);
   const [providerFilter, setProviderFilter] = useState<Provider | null>(null);
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
+  const [healthFilter, setHealthFilter] = useState<AssetHealthStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [connectTarget, setConnectTarget] = useState<Asset | null>(null);
   const [detailAsset, setDetailAsset] = useState<Asset | null>(null);
@@ -36,58 +40,16 @@ export default function App() {
   const [rescanning, setRescanning] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [draggedAsset, setDraggedAsset] = useState<Asset | null>(null);
+  const [historyEntries, setHistoryEntries] = useState<HistoryEntry[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyBusyId, setHistoryBusyId] = useState<number | 'latest' | null>(null);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedAssetIds, setSelectedAssetIds] = useState<Set<string>>(new Set());
+  const [batchTool, setBatchTool] = useState<Provider>('claude');
+  const [batchRunning, setBatchRunning] = useState(false);
   const highlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchRef = useRef<SearchBarHandle>(null);
-
-  // Keyboard shortcuts
-  useEffect(() => {
-    function handleKeyDown(e: KeyboardEvent) {
-      const meta = e.metaKey || e.ctrlKey;
-      const target = e.target as HTMLElement;
-      const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
-
-      // Cmd+F — focus search
-      if (meta && e.key === 'f') {
-        e.preventDefault();
-        setView('map');
-        setTimeout(() => searchRef.current?.focus(), 50);
-        return;
-      }
-      // Cmd+N — create new asset
-      if (meta && e.key === 'n') {
-        e.preventDefault();
-        setShowCreate(true);
-        return;
-      }
-      // Cmd+R — rescan
-      if (meta && e.key === 'r') {
-        e.preventDefault();
-        handleRescan();
-        return;
-      }
-      // Cmd+1/2/3/4 — switch views
-      if (meta && e.key >= '1' && e.key <= '4') {
-        e.preventDefault();
-        const views: View[] = ['map', 'projects', 'agents', 'servers'];
-        setView(views[parseInt(e.key) - 1]);
-        return;
-      }
-      // Escape — close modals/panels, clear search
-      if (e.key === 'Escape' && !isInput) {
-        if (detailAsset) { setDetailAsset(null); return; }
-        if (connectTarget) { setConnectTarget(null); return; }
-        if (showCreate) { setShowCreate(false); return; }
-        if (search) { setSearch(''); return; }
-      }
-      // Escape in search input — clear and blur
-      if (e.key === 'Escape' && isInput && target.tagName === 'INPUT') {
-        if (search) { setSearch(''); }
-        (target as HTMLInputElement).blur();
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [detailAsset, connectTarget, showCreate, search]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -97,7 +59,7 @@ export default function App() {
 
   const loadData = useCallback(async () => {
     try {
-      const [assetsRes, statsRes, catsRes] = await Promise.all([
+      const [assetsRes, statsRes, catsRes, historyRes, topologyRes] = await Promise.all([
         fetchAssets({
           type: typeFilter ?? undefined,
           provider: providerFilter ?? undefined,
@@ -106,10 +68,14 @@ export default function App() {
         }),
         fetchStats(),
         fetchCategories(),
+        fetchHistory(50),
+        fetchTopology(),
       ]);
       setAssets(assetsRes.data);
       setStats(statsRes.data);
       setCategories(catsRes.data);
+      setHistoryEntries(historyRes.data);
+      setTopology(topologyRes.data);
     } catch (err) {
       console.error('Failed to load data:', err);
     } finally {
@@ -131,6 +97,8 @@ export default function App() {
   }, [loadData]);
 
   const usedByMap = useMemo(() => {
+    const fromTopology = buildUsedByMapFromTopology(topology);
+    if (Object.keys(fromTopology).length > 0) return fromTopology;
     const map: Record<string, string[]> = {};
     for (const asset of assets) {
       for (const dep of asset.deps) {
@@ -139,24 +107,47 @@ export default function App() {
       }
     }
     return map;
-  }, [assets]);
+  }, [assets, topology]);
+
+  const healthCounts = useMemo<Record<AssetHealthStatus, number>>(() => (
+    assets.reduce<Record<AssetHealthStatus, number>>((acc, asset) => {
+      if (asset.health?.status === 'warning') acc.warning += 1;
+      if (asset.health?.status === 'broken') acc.broken += 1;
+      return acc;
+    }, { warning: 0, broken: 0 })
+  ), [assets]);
+
+  const visibleAssets = useMemo(() => {
+    if (!healthFilter) return assets;
+    return assets.filter((asset) => asset.health?.status === healthFilter);
+  }, [assets, healthFilter]);
 
   const grouped = useMemo(() => {
     const map = new Map<string, Asset[]>();
-    for (const asset of assets) {
+    for (const asset of visibleAssets) {
       const cat = asset.cat || 'Other';
       if (!map.has(cat)) map.set(cat, []);
       map.get(cat)!.push(asset);
     }
     return [...map.entries()].sort(([, a], [, b]) => b.length - a.length);
-  }, [assets]);
+  }, [visibleAssets]);
 
-  const showToast = (msg: string) => {
+  const selectableVisibleAssets = useMemo(
+    () => visibleAssets.filter((asset) => ['skill', 'agent', 'mcp', 'instruction', 'rule'].includes(asset.type)),
+    [visibleAssets]
+  );
+
+  const selectedMapAssets = useMemo(
+    () => assets.filter((asset) => selectedAssetIds.has(asset.id)),
+    [assets, selectedAssetIds]
+  );
+
+  const showToast = useCallback((msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(null), 3000);
-  };
+  }, []);
 
-  const handleRescan = async () => {
+  const handleRescan = useCallback(async () => {
     setRescanning(true);
     try {
       const res = await rescan();
@@ -167,7 +158,185 @@ export default function App() {
     } finally {
       setRescanning(false);
     }
-  };
+  }, [loadData, showToast]);
+
+  const openHistory = useCallback(async () => {
+    setShowHistory(true);
+    setHistoryLoading(true);
+    try {
+      const res = await fetchHistory(50);
+      setHistoryEntries(res.data);
+    } catch (err) {
+      console.error('Failed to load history:', err);
+      showToast('Failed to load history');
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [showToast]);
+
+  const handleUndoLast = useCallback(async () => {
+    setHistoryBusyId('latest');
+    try {
+      await undoLastAction();
+      showToast('Last change rolled back');
+      await loadData();
+    } catch (err) {
+      console.error('Undo failed:', err);
+      showToast(err instanceof Error ? err.message : 'Undo failed');
+    } finally {
+      setHistoryBusyId(null);
+    }
+  }, [loadData, showToast]);
+
+  const handleRollbackHistory = useCallback(async (historyId: number) => {
+    setHistoryBusyId(historyId);
+    try {
+      await rollbackHistoryEntry(historyId);
+      showToast(`Rolled back history entry #${historyId}`);
+      await loadData();
+    } catch (err) {
+      console.error('Rollback failed:', err);
+      showToast(err instanceof Error ? err.message : 'Rollback failed');
+    } finally {
+      setHistoryBusyId(null);
+    }
+  }, [loadData, showToast]);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      const meta = e.metaKey || e.ctrlKey;
+      const target = e.target as HTMLElement;
+      const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
+
+      if (meta && e.key === 'f') {
+        e.preventDefault();
+        setView('map');
+        setTimeout(() => searchRef.current?.focus(), 50);
+        return;
+      }
+      if (meta && e.key === 'n') {
+        e.preventDefault();
+        setShowCreate(true);
+        return;
+      }
+      if (meta && e.key === 'r') {
+        e.preventDefault();
+        handleRescan();
+        return;
+      }
+      if (meta && e.key.toLowerCase() === 'z' && !isInput) {
+        e.preventDefault();
+        void handleUndoLast();
+        return;
+      }
+      if (meta && e.key >= '1' && e.key <= '4') {
+        e.preventDefault();
+        const views: View[] = ['map', 'projects', 'agents', 'servers'];
+        setView(views[parseInt(e.key) - 1]);
+        return;
+      }
+      if (e.key === 'Escape' && !isInput) {
+        if (selectionMode) { setSelectionMode(false); setSelectedAssetIds(new Set()); return; }
+        if (showHistory) { setShowHistory(false); return; }
+        if (detailAsset) { setDetailAsset(null); return; }
+        if (connectTarget) { setConnectTarget(null); return; }
+        if (showCreate) { setShowCreate(false); return; }
+        if (search) { setSearch(''); return; }
+      }
+      if (e.key === 'Escape' && isInput && target.tagName === 'INPUT') {
+        if (search) { setSearch(''); }
+        (target as HTMLInputElement).blur();
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectionMode, showHistory, detailAsset, connectTarget, showCreate, search, handleRescan, handleUndoLast]);
+
+  const toggleAssetSelection = useCallback((asset: Asset) => {
+    setSelectedAssetIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(asset.id)) next.delete(asset.id);
+      else next.add(asset.id);
+      return next;
+    });
+  }, []);
+
+  const clearSelection = useCallback(() => {
+    setSelectedAssetIds(new Set());
+  }, []);
+
+  const setSelectionEnabled = useCallback((enabled: boolean) => {
+    setSelectionMode(enabled);
+    if (!enabled) clearSelection();
+  }, [clearSelection]);
+
+  const selectVisibleAssets = useCallback(() => {
+    setSelectedAssetIds(new Set(selectableVisibleAssets.map((asset) => asset.id)));
+  }, [selectableVisibleAssets]);
+
+  const batchItemsFromAssets = useCallback((items: Asset[]) => (
+    items.map((asset) => ({
+      assetId: asset.id,
+      name: asset.name,
+      type: asset.type,
+      filePath: asset.filePath,
+      providers: asset.providers,
+      scope: 'local' as const,
+    }))
+  ), []);
+
+  const runBatchValidation = useCallback(async () => {
+    if (selectedMapAssets.length === 0) return;
+    setBatchRunning(true);
+    try {
+      const result = await validateBatch(batchItemsFromAssets(selectedMapAssets));
+      showToast(`Validated ${result.total}: ${result.okCount ?? 0} ok, ${result.warningCount ?? 0} warnings, ${result.brokenCount ?? 0} broken, ${result.failureCount ?? 0} failed`);
+      await loadData();
+    } catch (err) {
+      console.error('Batch validation failed:', err);
+      showToast('Batch validation failed');
+    } finally {
+      setBatchRunning(false);
+    }
+  }, [batchItemsFromAssets, loadData, selectedMapAssets, showToast]);
+
+  const runBatchConnect = useCallback(async (mode: 'connect' | 'disconnect') => {
+    if (selectedMapAssets.length === 0) return;
+    setBatchRunning(true);
+    try {
+      const items = batchItemsFromAssets(selectedMapAssets);
+      const result = mode === 'connect'
+        ? await connectBatch(items, batchTool)
+        : await disconnectBatch(items, batchTool);
+      showToast(`${mode === 'connect' ? 'Connected' : 'Disconnected'} ${result.successCount ?? 0}/${result.total} items for ${PROVIDER_LABELS[batchTool]}`);
+      await loadData();
+    } catch (err) {
+      console.error(`Batch ${mode} failed:`, err);
+      showToast(`Batch ${mode} failed`);
+    } finally {
+      setBatchRunning(false);
+    }
+  }, [batchItemsFromAssets, batchTool, loadData, selectedMapAssets, showToast]);
+
+  const runBatchDelete = useCallback(async () => {
+    if (selectedMapAssets.length === 0) return;
+    if (!window.confirm(`Delete ${selectedMapAssets.length} selected assets? This cannot be undone.`)) return;
+    setBatchRunning(true);
+    try {
+      const result = await deleteBatch(batchItemsFromAssets(selectedMapAssets));
+      const failedIds = new Set(result.results.filter((entry) => !entry.ok).map((entry) => entry.id));
+      setSelectedAssetIds(failedIds);
+      setSelectionMode(failedIds.size > 0);
+      showToast(`Deleted ${result.successCount ?? 0}/${result.total} selected assets`);
+      await loadData();
+    } catch (err) {
+      console.error('Batch delete failed:', err);
+      showToast('Batch delete failed');
+    } finally {
+      setBatchRunning(false);
+    }
+  }, [batchItemsFromAssets, loadData, selectedMapAssets, showToast]);
 
   const handleNavigate = (name: string) => {
     const el = document.getElementById(`card-${name}`);
@@ -189,10 +358,14 @@ export default function App() {
     const asset = event.active.data.current?.asset as Asset | undefined;
     const provider = event.over?.data.current?.provider as string | undefined;
     if (asset && provider) {
+      if (!assetCanConnect(asset)) {
+        showToast(asset.health?.summary || 'This asset cannot be connected until its blocking issues are fixed');
+        return;
+      }
       try {
-        await connectAsset(asset.name, provider, asset.type);
+        await connectAsset(asset.id, provider, asset.type);
         showToast(`Connected ${asset.name} → ${provider}`);
-        loadData();
+        void loadData();
       } catch {
         showToast('Connection failed');
       }
@@ -223,22 +396,38 @@ export default function App() {
             AI Ecosystem Map
           </h1>
         </div>
-        <nav className="flex gap-1">
-          {NAV_ITEMS.map((item) => (
-            <button
-              key={item.key}
-              onClick={() => setView(item.key)}
-              className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
-                view === item.key
-                  ? 'bg-accent/10 text-accent'
-                  : 'text-accent-fg hover:bg-[hsl(240,4%,13%)]'
-              }`}
-            >
-              {NAV_ICONS[item.key]}
-              {item.label}
-            </button>
-          ))}
-        </nav>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => void handleUndoLast()}
+            disabled={historyBusyId !== null || !historyEntries.some((entry) => entry.can_rollback)}
+            className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-accent-fg hover:bg-[hsl(240,4%,13%)] transition-colors disabled:opacity-40"
+          >
+            {historyBusyId === 'latest' ? 'Undoing…' : 'Undo Last'}
+          </button>
+          <button
+            onClick={() => void openHistory()}
+            disabled={historyBusyId !== null}
+            className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-accent-fg hover:bg-[hsl(240,4%,13%)] transition-colors disabled:opacity-40"
+          >
+            History
+          </button>
+          <nav className="flex gap-1">
+            {NAV_ITEMS.map((item) => (
+              <button
+                key={item.key}
+                onClick={() => setView(item.key)}
+                className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                  view === item.key
+                    ? 'bg-accent/10 text-accent'
+                    : 'text-accent-fg hover:bg-[hsl(240,4%,13%)]'
+                }`}
+              >
+                {NAV_ICONS[item.key]}
+                {item.label}
+              </button>
+            ))}
+          </nav>
+        </div>
       </header>
 
       {/* Main content */}
@@ -254,10 +443,80 @@ export default function App() {
             {/* Top bar: search + actions */}
             <div className="flex items-center justify-between border-b border-border px-6 py-4 shrink-0">
               <SearchBar ref={searchRef} value={search} onChange={setSearch} />
-              <div className="flex gap-2">
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                {selectionMode && (
+                  <>
+                    <span className="rounded-lg border border-accent/25 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent">
+                      {selectedMapAssets.length} selected
+                    </span>
+                    <button
+                      onClick={selectVisibleAssets}
+                      disabled={batchRunning || selectableVisibleAssets.length === 0}
+                      className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-accent-fg hover:bg-[hsl(240,4%,13%)] transition-colors disabled:opacity-40"
+                    >
+                      Select Visible
+                    </button>
+                    <button
+                      onClick={clearSelection}
+                      disabled={batchRunning || selectedMapAssets.length === 0}
+                      className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-accent-fg hover:bg-[hsl(240,4%,13%)] transition-colors disabled:opacity-40"
+                    >
+                      Clear
+                    </button>
+                    <select
+                      value={batchTool}
+                      onChange={(e) => setBatchTool(e.target.value as Provider)}
+                      disabled={batchRunning}
+                      className="rounded-lg border border-border bg-surface px-3 py-1.5 text-xs text-text focus:outline-none focus:border-accent disabled:opacity-40"
+                    >
+                      {Object.entries(PROVIDER_LABELS).map(([key, label]) => (
+                        <option key={key} value={key}>{label}</option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={runBatchValidation}
+                      disabled={batchRunning || selectedMapAssets.length === 0}
+                      className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-accent-fg hover:bg-[hsl(240,4%,13%)] transition-colors disabled:opacity-40"
+                    >
+                      Validate Selected
+                    </button>
+                    <button
+                      onClick={() => void runBatchConnect('connect')}
+                      disabled={batchRunning || selectedMapAssets.length === 0}
+                      className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-accent-fg hover:bg-[hsl(240,4%,13%)] transition-colors disabled:opacity-40"
+                    >
+                      Connect Selected
+                    </button>
+                    <button
+                      onClick={() => void runBatchConnect('disconnect')}
+                      disabled={batchRunning || selectedMapAssets.length === 0}
+                      className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-accent-fg hover:bg-[hsl(240,4%,13%)] transition-colors disabled:opacity-40"
+                    >
+                      Disconnect Selected
+                    </button>
+                    <button
+                      onClick={runBatchDelete}
+                      disabled={batchRunning || selectedMapAssets.length === 0}
+                      className="rounded-lg border border-red/30 bg-red/10 px-3 py-1.5 text-xs font-medium text-red hover:bg-red/15 transition-colors disabled:opacity-40"
+                    >
+                      Delete Selected
+                    </button>
+                  </>
+                )}
+                <button
+                  onClick={() => setSelectionEnabled(!selectionMode)}
+                  disabled={batchRunning}
+                  className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-40 ${
+                    selectionMode
+                      ? 'border-accent/25 bg-accent/10 text-accent'
+                      : 'border-border text-accent-fg hover:bg-[hsl(240,4%,13%)]'
+                  }`}
+                >
+                  {selectionMode ? 'Done' : 'Select'}
+                </button>
                 <button
                   onClick={handleRescan}
-                  disabled={rescanning}
+                  disabled={rescanning || batchRunning}
                   className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-accent-fg hover:bg-[hsl(240,4%,13%)] transition-colors disabled:opacity-40"
                 >
                   <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182" /></svg>
@@ -265,7 +524,8 @@ export default function App() {
                 </button>
                 <button
                   onClick={() => setShowCreate(true)}
-                  className="flex items-center gap-1.5 rounded-lg border border-accent/20 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent hover:bg-accent/15 transition-colors"
+                  disabled={batchRunning}
+                  className="flex items-center gap-1.5 rounded-lg border border-accent/20 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent hover:bg-accent/15 transition-colors disabled:opacity-40"
                 >
                   <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" /></svg>
                   Create
@@ -274,25 +534,28 @@ export default function App() {
             </div>
 
             {/* Stats */}
-            <StatsBar stats={stats} />
+            <StatsBar stats={stats} healthCounts={healthCounts} />
 
             {/* Sidebar + cards */}
             <div className="flex flex-1 overflow-hidden">
               <Sidebar
                 categories={categories}
+                healthCounts={healthCounts}
                 activeType={typeFilter}
                 activeProvider={providerFilter}
                 activeCategory={categoryFilter}
+                activeHealth={healthFilter}
                 onTypeChange={setTypeFilter}
                 onProviderChange={setProviderFilter}
                 onCategoryChange={setCategoryFilter}
+                onHealthChange={setHealthFilter}
               />
 
               {/* Cards grid */}
               <div className="flex-1 overflow-y-auto p-6">
                 {loading ? (
                   <div className="flex h-40 items-center justify-center text-sm text-muted">Loading...</div>
-                ) : assets.length === 0 ? (
+                ) : visibleAssets.length === 0 ? (
                   <div className="flex h-40 items-center justify-center text-sm text-muted">No items match your filters</div>
                 ) : (
                   grouped.map(([cat, items]) => (
@@ -305,6 +568,9 @@ export default function App() {
                       onNavigate={handleNavigate}
                       onAssetClick={setDetailAsset}
                       highlightName={highlightName}
+                      selectionMode={selectionMode}
+                      selectedAssetIds={selectedAssetIds}
+                      onToggleSelection={toggleAssetSelection}
                     />
                   ))
                 )}
@@ -326,8 +592,9 @@ export default function App() {
       {detailAsset && (
         <AssetDetail
           asset={detailAsset}
+          topology={topology}
           onClose={() => setDetailAsset(null)}
-          onDeleted={() => { loadData(); }}
+          onDeleted={() => { void loadData(); }}
           onConnect={(a) => { setDetailAsset(null); setConnectTarget(a); }}
         />
       )}
@@ -336,7 +603,18 @@ export default function App() {
       {showCreate && (
         <CreateAssetModal
           onClose={() => setShowCreate(false)}
-          onCreated={() => { setShowCreate(false); loadData(); }}
+          onCreated={() => { setShowCreate(false); void loadData(); }}
+        />
+      )}
+
+      {showHistory && (
+        <HistoryModal
+          entries={historyEntries}
+          loading={historyLoading}
+          busyId={historyBusyId}
+          onClose={() => setShowHistory(false)}
+          onUndoLatest={() => void handleUndoLast()}
+          onRollback={(historyId) => void handleRollbackHistory(historyId)}
         />
       )}
 

@@ -81,7 +81,12 @@ function scanMcpServers(searchPaths) {
         if (seen.has(name)) {
           // Add providers to existing
           const existing = servers.find(s => s.name === name);
-          if (existing) providers.forEach(p => { if (!existing.providers.includes(p)) existing.providers.push(p); });
+          if (existing) {
+            providers.forEach((p) => {
+              if (!existing.providers.includes(p)) existing.providers.push(p);
+              existing.locations[p] = mcpPath;
+            });
+          }
           continue;
         }
         seen.add(name);
@@ -91,7 +96,10 @@ function scanMcpServers(searchPaths) {
           type: 'mcp',
           transport: config.type || 'stdio',
           command: config.command || '',
+          filePath: mcpPath,
+          rawConfig: config,
           providers: [...providers],
+          locations: Object.fromEntries(providers.map((provider) => [provider, mcpPath])),
         });
       }
     } catch { /* skip invalid json */ }
@@ -153,11 +161,60 @@ function scanner(primaryDir) {
     }
   }
 
+  // Rules
+  const claudeRulesDir = path.join(claudeDir, 'rules');
+  if (fs.existsSync(claudeRulesDir)) {
+    for (const { name, filePath } of findMdFiles(claudeRulesDir)) {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const parsed = parseFrontmatter(content);
+      rules.push({
+        name: parsed.name || name,
+        desc: parsed.description || extractFirstLine(content) || `Claude rule: ${name}`,
+        type: 'rule',
+        providers: ['claude'],
+        filePath,
+        source: 'claude',
+      });
+    }
+  }
+
   // ═══════════════════════════════════════════
   // 2. CODEX CLI (OpenAI)
   // ═══════════════════════════════════════════
   const codexDir = path.join(HOME, '.codex');
   if (fs.existsSync(codexDir)) {
+    const codexSkillsDir = path.join(codexDir, 'skills', 'public');
+    if (fs.existsSync(codexSkillsDir)) {
+      for (const { name, filePath } of findMdFiles(codexSkillsDir)) {
+        const content = fs.readFileSync(filePath, 'utf-8');
+        const parsed = parseFrontmatter(content);
+        skills.push({
+          name: parsed.name || name,
+          desc: parsed.description || extractFirstLine(content),
+          type: 'skill',
+          providers: ['codex'],
+          filePath,
+          source: 'codex',
+        });
+      }
+    }
+
+    const codexAgentsDir = path.join(codexDir, 'agents');
+    if (fs.existsSync(codexAgentsDir)) {
+      for (const { name, filePath } of findMdFiles(codexAgentsDir)) {
+        const content = fs.readFileSync(filePath, 'utf-8');
+        const parsed = parseFrontmatter(content);
+        agents.push({
+          name: parsed.name || name,
+          desc: parsed.description || extractFirstLine(content),
+          type: 'agent',
+          providers: ['codex'],
+          filePath,
+          source: 'codex',
+        });
+      }
+    }
+
     // Codex instructions
     const codexInstr = path.join(codexDir, 'instructions.md');
     if (fs.existsSync(codexInstr)) {
@@ -166,6 +223,7 @@ function scanner(primaryDir) {
         desc: extractFirstLine(fs.readFileSync(codexInstr, 'utf-8')) || 'Codex global instructions',
         type: 'instruction',
         providers: ['codex'],
+        filePath: codexInstr,
         source: 'codex',
       });
     }
@@ -178,7 +236,30 @@ function scanner(primaryDir) {
       desc: extractFirstLine(fs.readFileSync(agentsMd, 'utf-8')) || 'Cross-IDE agent instructions',
       type: 'instruction',
       providers: ['codex', 'copilot', 'cursor', 'windsurf'],
+      filePath: agentsMd,
       source: 'shared',
+    });
+  }
+  const globalClaudeMd = path.join(claudeDir, 'CLAUDE.md');
+  if (fs.existsSync(globalClaudeMd)) {
+    instructions.push({
+      name: 'claude',
+      desc: extractFirstLine(fs.readFileSync(globalClaudeMd, 'utf-8')) || 'Claude global instructions',
+      type: 'instruction',
+      providers: ['claude'],
+      filePath: globalClaudeMd,
+      source: 'claude',
+    });
+  }
+  const claudeMd = path.join(projectRoot, 'CLAUDE.md');
+  if (fs.existsSync(claudeMd)) {
+    instructions.push({
+      name: 'CLAUDE.md',
+      desc: extractFirstLine(fs.readFileSync(claudeMd, 'utf-8')) || 'Claude project instructions',
+      type: 'instruction',
+      providers: ['claude'],
+      filePath: claudeMd,
+      source: 'claude',
     });
   }
 
@@ -187,6 +268,22 @@ function scanner(primaryDir) {
   // ═══════════════════════════════════════════
   const geminiDir = path.join(HOME, '.gemini');
   if (fs.existsSync(geminiDir)) {
+    const geminiSkillsDir = path.join(geminiDir, 'skills');
+    if (fs.existsSync(geminiSkillsDir)) {
+      for (const { name, filePath } of findMdFiles(geminiSkillsDir)) {
+        const content = fs.readFileSync(filePath, 'utf-8');
+        const parsed = parseFrontmatter(content);
+        skills.push({
+          name: parsed.name || name,
+          desc: parsed.description || extractFirstLine(content),
+          type: 'skill',
+          providers: ['gemini'],
+          filePath,
+          source: 'gemini',
+        });
+      }
+    }
+
     // Gemini settings/instructions
     for (const fname of ['instructions.md', 'GEMINI.md']) {
       const fpath = path.join(geminiDir, fname);
@@ -196,6 +293,7 @@ function scanner(primaryDir) {
           desc: extractFirstLine(fs.readFileSync(fpath, 'utf-8')) || 'Gemini instructions',
           type: 'instruction',
           providers: ['gemini'],
+          filePath: fpath,
           source: 'gemini',
         });
       }
@@ -209,6 +307,7 @@ function scanner(primaryDir) {
       desc: extractFirstLine(fs.readFileSync(geminiMd, 'utf-8')) || 'Gemini project instructions',
       type: 'instruction',
       providers: ['gemini'],
+      filePath: geminiMd,
       source: 'gemini',
     });
   }
@@ -228,6 +327,7 @@ function scanner(primaryDir) {
           desc: parsed.description || extractFirstLine(content) || `Cursor rule: ${name}`,
           type: 'rule',
           providers: ['cursor'],
+          filePath,
           source: 'cursor',
         });
       }
@@ -236,11 +336,12 @@ function scanner(primaryDir) {
   // .cursorrules file
   const cursorrules = path.join(projectRoot, '.cursorrules');
   if (fs.existsSync(cursorrules)) {
-    rules.push({
+    instructions.push({
       name: '.cursorrules',
-      desc: extractFirstLine(fs.readFileSync(cursorrules, 'utf-8')) || 'Cursor rules file',
-      type: 'rule',
+      desc: extractFirstLine(fs.readFileSync(cursorrules, 'utf-8')) || 'Cursor instructions file',
+      type: 'instruction',
       providers: ['cursor'],
+      filePath: cursorrules,
       source: 'cursor',
     });
   }
@@ -260,6 +361,7 @@ function scanner(primaryDir) {
           desc: parsed.description || extractFirstLine(content) || `Windsurf rule: ${name}`,
           type: 'rule',
           providers: ['windsurf'],
+          filePath,
           source: 'windsurf',
         });
       }
@@ -268,11 +370,12 @@ function scanner(primaryDir) {
   // .windsurfrules file
   const wsrules = path.join(projectRoot, '.windsurfrules');
   if (fs.existsSync(wsrules)) {
-    rules.push({
+    instructions.push({
       name: '.windsurfrules',
-      desc: extractFirstLine(fs.readFileSync(wsrules, 'utf-8')) || 'Windsurf rules file',
-      type: 'rule',
+      desc: extractFirstLine(fs.readFileSync(wsrules, 'utf-8')) || 'Windsurf instructions file',
+      type: 'instruction',
       providers: ['windsurf'],
+      filePath: wsrules,
       source: 'windsurf',
     });
   }
@@ -287,6 +390,7 @@ function scanner(primaryDir) {
       desc: extractFirstLine(fs.readFileSync(copilotInstr, 'utf-8')) || 'GitHub Copilot instructions',
       type: 'instruction',
       providers: ['copilot'],
+      filePath: copilotInstr,
       source: 'copilot',
     });
   }
@@ -303,6 +407,7 @@ function scanner(primaryDir) {
         desc: 'Continue.dev configuration',
         type: 'instruction',
         providers: ['continue_dev'],
+        filePath: configPath,
         source: 'continue',
       });
     }
@@ -314,6 +419,9 @@ function scanner(primaryDir) {
   const mcpSearchPaths = [
     { mcpPath: path.join(claudeDir, '.mcp.json'), providers: ['claude'] },
     { mcpPath: path.join(claudeDir, 'mcp.json'), providers: ['claude'] },
+    { mcpPath: path.join(HOME, '.codex', 'mcp.json'), providers: ['codex'] },
+    { mcpPath: path.join(HOME, '.gemini', 'mcp.json'), providers: ['gemini'] },
+    { mcpPath: path.join(HOME, '.windsurf', 'mcp.json'), providers: ['windsurf'] },
     { mcpPath: path.join(projectRoot, '.mcp.json'), providers: ['claude', 'cursor'] },
     { mcpPath: path.join(projectRoot, 'mcp.json'), providers: ['claude', 'cursor'] },
     { mcpPath: path.join(HOME, '.continue', 'config.json'), providers: ['continue_dev'] },

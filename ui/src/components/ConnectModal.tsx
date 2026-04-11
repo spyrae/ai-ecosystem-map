@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
-import type { Asset, Provider } from '../types';
-import { PROVIDER_LABELS } from '../types';
+import type { Asset, ConnectionInfo, Provider } from '../types';
+import { CAPABILITY_STATE_LABELS, PROVIDER_LABELS } from '../types';
 import { fetchConnections, connectAsset, disconnectAsset } from '../lib/api';
 
 interface ConnectModalProps {
@@ -8,7 +8,7 @@ interface ConnectModalProps {
   onClose: () => void;
 }
 
-type ConnectionState = Record<string, { connected: boolean; method?: string; loading?: boolean; isSource?: boolean; isSymlink?: boolean; supported?: boolean }>;
+type ConnectionState = Record<string, ConnectionInfo & { loading?: boolean }>;
 
 const PROVIDER_COLORS: Record<string, string> = {
   claude: '#f0883e',
@@ -25,11 +25,12 @@ const TOOL_ORDER: Provider[] = ['claude', 'codex', 'gemini', 'cursor', 'windsurf
 export function ConnectModal({ asset, onClose }: ConnectModalProps) {
   const [connections, setConnections] = useState<ConnectionState>({});
   const [toast, setToast] = useState<string | null>(null);
+  const hasLoadedConnections = Object.keys(connections).length > 0;
 
   const loadConnections = useCallback(async () => {
     if (!asset) return;
     try {
-      const data = await fetchConnections(asset.name, asset.type);
+      const data = await fetchConnections(asset.id, asset.type);
       setConnections(data);
     } catch (err) {
       console.error('Failed to load connections:', err);
@@ -37,8 +38,22 @@ export function ConnectModal({ asset, onClose }: ConnectModalProps) {
   }, [asset]);
 
   useEffect(() => {
-    if (asset) loadConnections();
-  }, [asset, loadConnections]);
+    if (!asset) return;
+
+    let cancelled = false;
+
+    const run = async () => {
+      try {
+        const data = await fetchConnections(asset.id, asset.type);
+        if (!cancelled) setConnections(data);
+      } catch (err) {
+        console.error('Failed to load connections:', err);
+      }
+    };
+
+    void run();
+    return () => { cancelled = true; };
+  }, [asset]);
 
   if (!asset) return null;
 
@@ -55,10 +70,10 @@ export function ConnectModal({ asset, onClose }: ConnectModalProps) {
 
     try {
       if (conn.connected) {
-        await disconnectAsset(asset.name, tool, asset.type);
+        await disconnectAsset(asset.id, tool, asset.type);
         showToast(`Disconnected ${asset.name} from ${PROVIDER_LABELS[tool as Provider] || tool}`);
       } else {
-        await connectAsset(asset.name, tool, asset.type);
+        await connectAsset(asset.id, tool, asset.type);
         showToast(`Connected ${asset.name} to ${PROVIDER_LABELS[tool as Provider] || tool}`);
       }
       await loadConnections();
@@ -89,11 +104,40 @@ export function ConnectModal({ asset, onClose }: ConnectModalProps) {
 
           {/* Tool list */}
           <div className="space-y-1.5">
+            {!hasLoadedConnections && (
+              <div className="rounded-lg border border-border bg-bg px-3 py-3 text-[13px] text-muted">
+                Loading provider targets...
+              </div>
+            )}
+            {hasLoadedConnections && (
+              <>
             {TOOL_ORDER.map((tool) => {
-              const conn = connections[tool];
-              if (!conn || conn.supported === false) return null;
-
+              const conn = connections[tool] ?? { tool, connected: false, installed: false, supported: false };
+              const capability = asset.capabilities?.providers.find((entry) => entry.provider === tool);
               const isSource = conn.isSource === true;
+              const isUnavailable = isSource || conn.supported === false || conn.installed === false || capability?.state === 'invalid';
+              const buttonLabel = isSource
+                ? 'Source'
+                : capability?.state === 'invalid'
+                  ? CAPABILITY_STATE_LABELS.invalid
+                  : conn.installed === false
+                    ? 'Missing'
+                    : conn.supported === false
+                      ? 'Unsupported'
+                      : conn.connected
+                        ? 'Disconnect'
+                        : 'Connect';
+              const detail = isSource
+                ? 'Source (original file)'
+                : conn.connected
+                  ? `Connected via ${conn.isSymlink ? 'symlink' : 'copy'}`
+                  : capability?.detail || (conn.installed === false
+                    ? 'Provider is not installed on this machine'
+                    : conn.supported === false
+                      ? 'This provider does not support the asset in this context'
+                      : 'Not connected');
+
+              const stateLabel = capability ? CAPABILITY_STATE_LABELS[capability.state] : null;
 
               return (
                 <div
@@ -109,9 +153,8 @@ export function ConnectModal({ asset, onClose }: ConnectModalProps) {
                     </div>
                     <div>
                       <div className="text-sm font-medium">{PROVIDER_LABELS[tool] || tool}</div>
-                      <div className="text-[11px] text-muted">
-                        {isSource ? 'Source (original file)' : conn.connected ? `Connected via ${conn.isSymlink ? 'symlink' : 'copy'}` : 'Not connected'}
-                      </div>
+                      <div className="text-[11px] text-muted">{detail}</div>
+                      {stateLabel && <div className="text-[10px] mt-1 text-muted uppercase tracking-wider">{stateLabel}</div>}
                     </div>
                   </div>
 
@@ -122,19 +165,23 @@ export function ConnectModal({ asset, onClose }: ConnectModalProps) {
                   ) : (
                     <button
                       onClick={() => handleToggle(tool)}
-                      disabled={conn.loading}
+                      disabled={conn.loading || isUnavailable}
                       className={`px-3.5 py-1.5 rounded-md border text-xs font-medium transition-all ${
                         conn.connected
                           ? 'border-green text-green hover:border-red hover:text-red'
-                          : 'border-border text-text hover:border-accent hover:text-accent'
-                      } ${conn.loading ? 'opacity-40 cursor-default' : ''}`}
+                          : isUnavailable
+                            ? 'border-border text-muted'
+                            : 'border-border text-text hover:border-accent hover:text-accent'
+                      } ${conn.loading || isUnavailable ? 'opacity-40 cursor-default' : ''}`}
                     >
-                      {conn.loading ? '...' : conn.connected ? 'Disconnect' : 'Connect'}
+                      {conn.loading ? '...' : buttonLabel}
                     </button>
                   )}
                 </div>
               );
             })}
+              </>
+            )}
           </div>
 
           <div className="mt-4 text-center">

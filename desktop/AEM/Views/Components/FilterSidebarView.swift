@@ -32,6 +32,21 @@ struct FilterSidebarView: View {
                     }
                 }
 
+                Divider()
+
+                filterSection("Health") {
+                    ForEach(AssetHealthFilter.allCases) { filter in
+                        filterRow(
+                            label: filter.label,
+                            count: store.healthCounts[filter] ?? 0,
+                            icon: filter.icon,
+                            isActive: store.healthFilter == filter
+                        ) {
+                            store.healthFilter = store.healthFilter == filter ? nil : filter
+                        }
+                    }
+                }
+
                 if !store.categories.isEmpty {
                     Divider()
 

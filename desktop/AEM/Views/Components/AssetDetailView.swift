@@ -20,6 +20,9 @@ struct AssetDetailView: View {
             VStack(alignment: .leading, spacing: 16) {
                 header
                 metadataSection
+                capabilitySection
+                topologySection
+                healthSection
                 connectionsSection
                 depsSection
                 editorSection
@@ -28,7 +31,7 @@ struct AssetDetailView: View {
         }
         .toolbar {
             ToolbarItem {
-                if hasFile && hasUnsavedChanges {
+                if hasEditableContent && hasUnsavedChanges {
                     Button("Save") { Task { await save() } }
                         .keyboardShortcut("s", modifiers: .command)
                 }
@@ -39,6 +42,7 @@ struct AssetDetailView: View {
                 } label: {
                     Image(systemName: "trash")
                 }
+                .disabled(!asset.canDelete)
             }
         }
         .alert("Delete \(asset.name)?", isPresented: $showDeleteConfirm) {
@@ -112,54 +116,230 @@ struct AssetDetailView: View {
         }
     }
 
-    private var connectionsSection: some View {
-        GroupBox("Connections") {
-            if connections.isEmpty {
-                Text("Loading...")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                VStack(spacing: 6) {
-                    ForEach(connections.sorted(by: { $0.key < $1.key }), id: \.key) { tool, info in
-                        if info.supported == true {
-                            HStack {
-                                if let provider = Provider(rawValue: tool) {
-                                    Image(systemName: provider.icon)
-                                    Text(provider.label)
-                                } else {
-                                    Text(tool)
+    @ViewBuilder
+    private var capabilitySection: some View {
+        if let capabilities = asset.capabilities {
+            GroupBox("Capability Matrix") {
+                VStack(alignment: .leading, spacing: 10) {
+                    let items = capabilities.summary.compactItems
+                    if !items.isEmpty {
+                        FlowLayout(spacing: 4) {
+                            ForEach(items, id: \.self) { item in
+                                Text(item)
+                                    .font(.caption2)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(.quaternary, in: Capsule())
+                            }
+                        }
+                    }
+
+                    ForEach(capabilities.providers) { entry in
+                        VStack(alignment: .leading, spacing: 5) {
+                            HStack(alignment: .top) {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(entry.label)
+                                        .font(.caption.weight(.semibold))
+                                    Text(entry.detail)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    if let targetPath = entry.targetPath, !targetPath.isEmpty {
+                                        Text(targetPath)
+                                            .font(.caption2.monospaced())
+                                            .foregroundStyle(.tertiary)
+                                            .textSelection(.enabled)
+                                    }
                                 }
                                 Spacer()
-                                if info.isSource == true {
-                                    // This is the original file location
-                                    HStack(spacing: 4) {
-                                        Circle().fill(.blue).frame(width: 6, height: 6)
-                                        Text("source")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
+                                Text(entry.state.label)
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(entry.state.tint)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 3)
+                                    .background(entry.state.tint.opacity(0.12), in: Capsule())
+                            }
+                        }
+                        .padding(8)
+                        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var topologySection: some View {
+        let snapshot = store.assetTopologySnapshot(assetId: asset.id)
+        if !snapshot.environments.isEmpty || !snapshot.projects.isEmpty || !snapshot.providers.isEmpty || !snapshot.dependsOn.isEmpty || !snapshot.dependedOnBy.isEmpty {
+            GroupBox("Topology") {
+                VStack(alignment: .leading, spacing: 12) {
+                    if !snapshot.environments.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Environment")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            FlowLayout(spacing: 4) {
+                                ForEach(snapshot.environments, id: \.id) { node in
+                                    topologyPill(node.label, tint: .secondary)
+                                }
+                            }
+                        }
+                    }
+
+                    if !snapshot.projects.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Projects")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            FlowLayout(spacing: 4) {
+                                ForEach(snapshot.projects, id: \.id) { node in
+                                    topologyPill(node.label, tint: .blue)
+                                }
+                            }
+                        }
+                    }
+
+                    if !snapshot.providers.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Providers")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            FlowLayout(spacing: 4) {
+                                ForEach(snapshot.providers, id: \.self) { link in
+                                    let state = link.edge.state ?? .available
+                                    topologyPill("\(link.node.label) · \(state.label)", tint: state.tint)
+                                }
+                            }
+                        }
+                    }
+
+                    if !snapshot.dependsOn.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Depends On")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            FlowLayout(spacing: 4) {
+                                ForEach(snapshot.dependsOn, id: \.id) { node in
+                                    topologyPill(node.label, tint: .purple)
+                                }
+                            }
+                        }
+                    }
+
+                    if !snapshot.dependedOnBy.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Used By")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            FlowLayout(spacing: 4) {
+                                ForEach(snapshot.dependedOnBy, id: \.id) { node in
+                                    topologyPill(node.label, tint: .green)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var healthSection: some View {
+        if let health = asset.health, !health.issues.isEmpty {
+            GroupBox("Health") {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(health.issues) { issue in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Label(issue.level == "blocking" ? "Blocking" : "Warning", systemImage: issue.level == "blocking" ? "exclamationmark.octagon.fill" : "exclamationmark.triangle.fill")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(issue.level == "blocking" ? .red : .orange)
+                            Text(issue.message)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                        .background((issue.level == "blocking" ? Color.red : Color.orange).opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                    }
+                }
+            }
+        }
+    }
+
+    private var connectionsSection: some View {
+        GroupBox("Connections") {
+            VStack(alignment: .leading, spacing: 8) {
+                if !asset.canConnect {
+                    Text("Connections are unavailable until the blocking asset issues are fixed.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                if let providers = asset.capabilities?.providers, !providers.isEmpty {
+                    VStack(spacing: 6) {
+                        ForEach(providers) { entry in
+                            let connection = connections[entry.provider]
+                            let isSource = connection?.isSource ?? entry.isSource
+                            let isConnected = connection?.connected ?? entry.connected
+                            let supported = connection?.supported ?? entry.supported
+                            let installed = connection?.installed ?? entry.installed
+                            let isUnavailable = !asset.canConnect || isSource || !supported || !installed || entry.state == .invalid
+
+                            HStack(alignment: .top) {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    HStack(spacing: 6) {
+                                        if let provider = Provider(rawValue: entry.provider) {
+                                            Image(systemName: provider.icon)
+                                                .foregroundStyle(entry.state.tint)
+                                        }
+                                        Text(entry.label)
+                                            .font(.caption.weight(.medium))
                                     }
-                                } else if info.connected {
-                                    HStack(spacing: 4) {
-                                        Circle().fill(.green).frame(width: 6, height: 6)
-                                        Text(info.isSymlink == true ? "symlink" : "connected")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
+
+                                    Text(entry.detail)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+
+                                    if let targetPath = connection?.targetPath ?? entry.targetPath, !targetPath.isEmpty {
+                                        Text(targetPath)
+                                            .font(.caption2.monospaced())
+                                            .foregroundStyle(.tertiary)
+                                            .textSelection(.enabled)
                                     }
+                                }
+                                Spacer()
+
+                                if isSource {
+                                    Text("Source")
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundStyle(.blue)
+                                } else if isConnected {
                                     Button("Disconnect") {
-                                        Task { await toggleConnection(tool: tool, connect: false) }
+                                        Task { await toggleConnection(tool: entry.provider, connect: false) }
                                     }
                                     .controlSize(.small)
+                                    .disabled(!asset.canConnect)
                                 } else {
-                                    Button("Connect") {
-                                        Task { await toggleConnection(tool: tool, connect: true) }
+                                    Button(entry.state == .invalid ? entry.state.label : "Connect") {
+                                        Task { await toggleConnection(tool: entry.provider, connect: true) }
                                     }
                                     .controlSize(.small)
                                     .buttonStyle(.borderedProminent)
+                                    .disabled(isUnavailable)
                                 }
                             }
                             .font(.caption)
+                            .padding(.vertical, 2)
                         }
                     }
+                } else if connections.isEmpty {
+                Text("Loading...")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                } else {
+                    Text("No provider targets available for this asset.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
@@ -183,13 +363,22 @@ struct AssetDetailView: View {
         }
     }
 
-    private var hasFile: Bool {
-        asset.filePath != nil && !(asset.filePath?.isEmpty ?? true) && asset.type != .mcp
+    private func topologyPill(_ text: String, tint: Color) -> some View {
+        Text(text)
+            .font(.caption)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(tint.opacity(0.12), in: Capsule())
+            .foregroundStyle(tint)
+    }
+
+    private var hasEditableContent: Bool {
+        asset.canEdit
     }
 
     @ViewBuilder
     private var editorSection: some View {
-        if hasFile {
+        if hasEditableContent {
             GroupBox("Content") {
                 if isLoadingContent {
                     ProgressView()
@@ -216,18 +405,25 @@ struct AssetDetailView: View {
                     }
                 }
             }
+        } else if asset.health?.hasBlocking == true {
+            GroupBox("Content") {
+                Text("Content is unavailable until the blocking asset issues are fixed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
     }
 
     // MARK: - Actions
 
     private func loadContent() async {
-        guard hasFile else {
+        guard hasEditableContent else {
             isLoadingContent = false
             return
         }
         do {
-            let result = try await api.fetchAssetContent(name: asset.name)
+            let result = try await api.fetchAssetContent(assetId: asset.id, type: asset.type)
             content = result.content
             originalContent = result.content
         } catch {
@@ -237,8 +433,12 @@ struct AssetDetailView: View {
     }
 
     private func loadConnections() async {
+        guard asset.canConnect else {
+            connections = [:]
+            return
+        }
         do {
-            connections = try await api.fetchConnections(name: asset.name, type: asset.type)
+            connections = try await api.fetchConnections(assetId: asset.id, type: asset.type)
         } catch {
             // Silent fail
         }
@@ -246,7 +446,7 @@ struct AssetDetailView: View {
 
     private func save() async {
         do {
-            try await api.updateAssetContent(name: asset.name, content: content)
+            try await api.updateAssetContent(assetId: asset.id, content: content, type: asset.type)
             originalContent = content
             store.showToast("Saved \(asset.name)")
         } catch {
@@ -255,11 +455,15 @@ struct AssetDetailView: View {
     }
 
     private func toggleConnection(tool: String, connect: Bool) async {
+        guard asset.canConnect else {
+            store.showToast(asset.health?.summary ?? "Connections are unavailable for this asset")
+            return
+        }
         do {
             if connect {
-                try await api.connect(name: asset.name, tool: tool, type: asset.type)
+                try await api.connect(assetId: asset.id, tool: tool, type: asset.type)
             } else {
-                try await api.disconnect(name: asset.name, tool: tool, type: asset.type)
+                try await api.disconnect(assetId: asset.id, tool: tool, type: asset.type)
             }
             await loadConnections()
             store.showToast(connect ? "Connected \(asset.name) → \(tool)" : "Disconnected \(asset.name) from \(tool)")
@@ -269,8 +473,12 @@ struct AssetDetailView: View {
     }
 
     private func deleteAsset() async {
+        guard asset.canDelete else {
+            store.showToast("Delete is unavailable for this asset")
+            return
+        }
         do {
-            try await api.deleteAsset(name: asset.name, type: asset.type)
+            try await api.deleteAsset(assetId: asset.id, type: asset.type)
             store.selectedAsset = nil
             store.showToast("Deleted \(asset.name)")
             await store.loadAll(api: api)

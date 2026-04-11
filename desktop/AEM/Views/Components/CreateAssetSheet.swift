@@ -14,6 +14,47 @@ struct CreateAssetSheet: View {
     @State private var isGenerating = false
     @State private var isCreating = false
 
+    private var availableProviders: [Provider] {
+        switch type {
+        case .skill: [.claude, .codex, .gemini]
+        case .agent: [.claude, .codex]
+        case .mcp: [.claude, .codex, .gemini, .windsurf, .continue_dev]
+        case .rule: [.cursor, .windsurf, .claude]
+        case .instruction: [.claude, .codex, .gemini, .copilot, .cursor, .windsurf]
+        }
+    }
+
+    private var supportsGlobalScope: Bool {
+        switch type {
+        case .rule: false
+        case .instruction: [.claude, .codex, .gemini].contains(provider)
+        case .mcp: provider != .continue_dev
+        default: true
+        }
+    }
+
+    private var supportsProjectScope: Bool {
+        switch type {
+        case .rule: true
+        case .instruction: true
+        case .skill: provider != .continue_dev
+        case .agent: provider == .claude
+        case .mcp: provider == .claude
+        }
+    }
+
+    private var derivedInstructionName: String {
+        switch provider {
+        case .claude: "claude"
+        case .codex: "agents"
+        case .gemini: "gemini"
+        case .copilot: "copilot-instructions"
+        case .cursor: "cursorrules"
+        case .windsurf: "windsurfrules"
+        case .continue_dev: "instructions"
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Header
@@ -32,6 +73,7 @@ struct CreateAssetSheet: View {
                 Section {
                     TextField("Name", text: $name)
                         .textFieldStyle(.roundedBorder)
+                        .disabled(type == .instruction)
 
                     Picker("Type", selection: $type) {
                         ForEach(AssetType.allCases) { t in
@@ -39,17 +81,23 @@ struct CreateAssetSheet: View {
                         }
                     }
 
-                    if type == .rule || type == .instruction {
+                    if type == .rule || type == .instruction || type == .skill || type == .agent || type == .mcp {
                         Picker("Provider", selection: $provider) {
-                            ForEach(Provider.allCases) { p in
+                            ForEach(availableProviders) { p in
                                 Text(p.label).tag(p)
                             }
                         }
                     }
 
-                    Picker("Scope", selection: $scope) {
-                        Text("Global").tag("global")
-                        Text("Project").tag("project")
+                    if supportsGlobalScope || supportsProjectScope {
+                        Picker("Scope", selection: $scope) {
+                            if supportsGlobalScope {
+                                Text("Global").tag("global")
+                            }
+                            if supportsProjectScope {
+                                Text("Project").tag("project")
+                            }
+                        }
                     }
                 }
 
@@ -90,6 +138,18 @@ struct CreateAssetSheet: View {
             .padding()
         }
         .frame(width: 520, height: 560)
+        .onAppear {
+            syncDerivedFields()
+        }
+        .onChange(of: type) { _, _ in
+            if !availableProviders.contains(provider) {
+                provider = availableProviders.first ?? .claude
+            }
+            syncDerivedFields()
+        }
+        .onChange(of: provider) { _, _ in
+            syncDerivedFields()
+        }
     }
 
     private func generate() async {
@@ -108,17 +168,39 @@ struct CreateAssetSheet: View {
         defer { isCreating = false }
         do {
             _ = try await api.createAsset(
-                name: name,
+                name: type == .instruction ? derivedInstructionName : name,
                 type: type,
                 content: content.isEmpty ? nil : content,
-                provider: (type == .rule || type == .instruction) ? provider.rawValue : nil,
+                provider: provider.rawValue,
                 scope: scope
             )
-            store.showToast("Created \(name)")
+            store.showToast("Created \(type == .instruction ? derivedInstructionName : name)")
             await store.loadAll(api: api)
             dismiss()
         } catch {
             store.showToast("Create failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func syncDerivedFields() {
+        if type == .instruction {
+            name = derivedInstructionName
+        }
+        if type == .mcp && content.isEmpty {
+            content = """
+            {
+              "command": "npx",
+              "args": ["-y", "your-mcp-server"],
+              "env": {}
+            }
+            """
+        }
+        if type == .rule {
+            scope = "project"
+        } else if !supportsGlobalScope && supportsProjectScope {
+            scope = "project"
+        } else if !supportsProjectScope {
+            scope = "global"
         }
     }
 }

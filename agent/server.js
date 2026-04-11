@@ -21,30 +21,29 @@ async function startServer(opts) {
   // Initial scan → categorize → persist to SQLite
   const { scanner } = require('./scanner');
   const { categorize } = require('./categorizer');
-  const raw = scanner(claudeDir);
-  let data = categorize(raw);
+  const { attachCapabilitiesToAssets } = require('./capabilities');
+  let raw = scanner(claudeDir);
+  let data = attachCapabilitiesToAssets(categorize(raw), { projectRoot });
   store.upsertAssets(data, store.getLocalEnvironmentId());
 
   console.log(`  Persisted ${data.length} assets to ${store.DB_PATH}`);
 
   // Build source index for connector
   const sourceIndex = {};
-  function rebuildIndex(rawData) {
+  function rebuildIndex(items) {
     for (const key of Object.keys(sourceIndex)) delete sourceIndex[key];
-    for (const item of [...rawData.skills, ...rawData.agents, ...(rawData.instructions || []), ...(rawData.rules || [])]) {
-      if (item.filePath) sourceIndex[item.name] = item;
-    }
-    for (const item of rawData.mcpServers) {
-      sourceIndex[item.name] = item;
+    for (const item of items) {
+      sourceIndex[item.id] = item;
+      sourceIndex[`${item.type}:${item.name}`] = item;
     }
   }
-  rebuildIndex(raw);
+  rebuildIndex(data);
 
   // Rescan function
   function rescan() {
-    const newRaw = scanner(claudeDir);
-    data = categorize(newRaw);
-    rebuildIndex(newRaw);
+    raw = scanner(claudeDir);
+    data = attachCapabilitiesToAssets(categorize(raw), { projectRoot });
+    rebuildIndex(data);
     store.upsertAssets(data, store.getLocalEnvironmentId());
     broadcast({ type: 'assets:updated', count: data.length });
     return data;
@@ -131,6 +130,10 @@ async function startServer(opts) {
   const watcher = createWatcher(claudeDir, projectRoot, () => {
     rescan();
   });
+  server.on('close', () => {
+    try { watcher.close(); } catch { /* ignore */ }
+  });
+  server.aemWatcher = watcher;
 
   // Start listening
   return new Promise((resolve) => {

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { AssetType } from '../types';
 import { createAsset, generateAsset } from '../lib/api';
 
@@ -70,15 +70,31 @@ This project uses...
 - Always do X
 - Never do Y
 `,
+  mcp: `{
+  "command": "npx",
+  "args": ["-y", "your-mcp-server"],
+  "env": {}
+}
+`,
 };
 
 // Provider options per asset type
 const TYPE_PROVIDERS: Record<string, { value: string; label: string; desc: string }[]> = {
   skill: [
-    { value: 'claude', label: 'Claude Code', desc: '~/.claude/commands/ — also works with Codex & Gemini' },
+    { value: 'claude', label: 'Claude Code', desc: '~/.claude/commands/' },
+    { value: 'codex', label: 'Codex CLI', desc: '~/.codex/skills/public/' },
+    { value: 'gemini', label: 'Gemini CLI', desc: '~/.gemini/skills/' },
   ],
   agent: [
     { value: 'claude', label: 'Claude Code', desc: '~/.claude/agents/' },
+    { value: 'codex', label: 'Codex CLI', desc: '~/.codex/agents/' },
+  ],
+  mcp: [
+    { value: 'claude', label: 'Claude Code', desc: '~/.claude/.mcp.json or project .mcp.json' },
+    { value: 'codex', label: 'Codex CLI', desc: '~/.codex/mcp.json' },
+    { value: 'gemini', label: 'Gemini CLI', desc: '~/.gemini/mcp.json' },
+    { value: 'windsurf', label: 'Windsurf', desc: '~/.windsurf/mcp.json' },
+    { value: 'continue_dev', label: 'Continue', desc: '~/.continue/config.json' },
   ],
   rule: [
     { value: 'cursor', label: 'Cursor', desc: '.cursor/rules/' },
@@ -95,6 +111,33 @@ const TYPE_PROVIDERS: Record<string, { value: string; label: string; desc: strin
   ],
 };
 
+function instructionNameForProvider(provider: string) {
+  switch (provider) {
+    case 'claude': return 'claude';
+    case 'codex': return 'agents';
+    case 'gemini': return 'gemini';
+    case 'copilot': return 'copilot-instructions';
+    case 'cursor': return 'cursorrules';
+    case 'windsurf': return 'windsurfrules';
+    default: return 'instructions';
+  }
+}
+
+function supportsProjectScope(type: AssetType, provider: string) {
+  if (type === 'rule') return true;
+  if (type === 'skill') return provider !== 'continue_dev';
+  if (type === 'agent') return provider === 'claude';
+  if (type === 'mcp') return provider === 'claude';
+  if (type === 'instruction') return ['claude', 'codex', 'gemini', 'copilot', 'cursor', 'windsurf'].includes(provider);
+  return false;
+}
+
+function supportsGlobalScope(type: AssetType, provider: string) {
+  if (type === 'rule') return false;
+  if (type === 'instruction') return ['claude', 'codex', 'gemini'].includes(provider);
+  return true;
+}
+
 export function CreateAssetModal({ onClose, onCreated }: CreateAssetModalProps) {
   const [mode, setMode] = useState<Mode>('manual');
   const [type, setType] = useState<AssetType>('skill');
@@ -109,6 +152,19 @@ export function CreateAssetModal({ onClose, onCreated }: CreateAssetModalProps) 
   const [aiPrompt, setAiPrompt] = useState('');
   const [generating, setGenerating] = useState(false);
   const [generated, setGenerated] = useState(false);
+
+  useEffect(() => {
+    if (type === 'instruction') {
+      setName(instructionNameForProvider(provider));
+    }
+    if (type === 'rule') {
+      setScope('project');
+    } else if (!supportsProjectScope(type, provider)) {
+      setScope('global');
+    } else if (!supportsGlobalScope(type, provider) && scope === 'global') {
+      setScope('project');
+    }
+  }, [type, provider, scope]);
 
   const handleTypeChange = (newType: AssetType) => {
     setType(newType);
@@ -140,15 +196,30 @@ export function CreateAssetModal({ onClose, onCreated }: CreateAssetModalProps) 
   };
 
   const handleCreate = async () => {
-    if (!name.trim()) { setError('Name is required'); return; }
-    if (!/^[a-z0-9][a-z0-9.-]*[a-z0-9]$|^[a-z0-9]$/.test(name)) {
+    const finalName = type === 'instruction' ? instructionNameForProvider(provider) : name.trim();
+    if (!finalName) { setError('Name is required'); return; }
+    if ((type === 'skill' || type === 'agent' || type === 'rule') && !/^[a-z0-9][a-z0-9.-]*[a-z0-9]$|^[a-z0-9]$/.test(finalName)) {
       setError('Name must be kebab-case (lowercase, hyphens, no spaces)');
+      return;
+    }
+    if (type === 'mcp' && !/^[A-Za-z0-9._:-]+$/.test(finalName)) {
+      setError('MCP name may contain letters, numbers, dot, underscore, colon and hyphen');
       return;
     }
     setCreating(true);
     setError(null);
     try {
-      const res = await createAsset({ name, type, content, provider, scope });
+      let config: Record<string, unknown> | undefined;
+      if (type === 'mcp') {
+        try {
+          config = JSON.parse(content);
+        } catch {
+          setError('MCP config must be valid JSON');
+          setCreating(false);
+          return;
+        }
+      }
+      const res = await createAsset({ name: finalName, type, content, provider, scope, config });
       if (res.ok) {
         onCreated();
         onClose();
@@ -196,8 +267,15 @@ export function CreateAssetModal({ onClose, onCreated }: CreateAssetModalProps) 
           <input
             type="text"
             value={name}
-            onChange={(e) => setName(e.target.value.toLowerCase().replace(/\s+/g, '-'))}
-            placeholder={type === 'instruction' ? 'filename (e.g. CLAUDE.md)' : 'asset-name (kebab-case)'}
+            onChange={(e) => setName(type === 'mcp' ? e.target.value : e.target.value.toLowerCase().replace(/\s+/g, '-'))}
+            placeholder={
+              type === 'instruction'
+                ? `derived from provider (${provider})`
+                : type === 'mcp'
+                  ? 'server-name'
+                  : 'asset-name (kebab-case)'
+            }
+            readOnly={type === 'instruction'}
             className="w-full bg-bg border border-border rounded-lg px-4 py-2 text-sm text-text font-mono placeholder:text-muted focus:outline-none focus:border-accent"
           />
 
@@ -225,20 +303,22 @@ export function CreateAssetModal({ onClose, onCreated }: CreateAssetModalProps) 
           )}
 
           {/* Scope: global vs project */}
-          {(type === 'skill' || type === 'agent') && (
+          {supportsProjectScope(type, provider) && (
             <div className="flex items-center gap-3">
               <span className="text-[11px] text-muted uppercase tracking-wider">Scope:</span>
-              <button
-                onClick={() => setScope('global')}
-                className={`px-2 py-1 rounded text-xs ${scope === 'global' ? 'bg-accent/15 text-accent' : 'text-muted hover:text-text'}`}
-              >
-                Global (~/.claude/)
-              </button>
+              {supportsGlobalScope(type, provider) && (
+                <button
+                  onClick={() => setScope('global')}
+                  className={`px-2 py-1 rounded text-xs ${scope === 'global' ? 'bg-accent/15 text-accent' : 'text-muted hover:text-text'}`}
+                >
+                  Global
+                </button>
+              )}
               <button
                 onClick={() => setScope('project')}
                 className={`px-2 py-1 rounded text-xs ${scope === 'project' ? 'bg-accent/15 text-accent' : 'text-muted hover:text-text'}`}
               >
-                Project-local (.claude/)
+                Project-local
               </button>
             </div>
           )}
@@ -276,12 +356,12 @@ export function CreateAssetModal({ onClose, onCreated }: CreateAssetModalProps) 
         {/* Content area */}
         <div className="flex-1 overflow-y-auto p-6 pt-3">
           {mode === 'manual' ? (
-            <textarea
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              className="w-full h-full min-h-[300px] bg-bg border border-border rounded-lg p-4 font-mono text-sm text-text resize-none focus:outline-none focus:border-accent"
-              spellCheck={false}
-              placeholder="File content..."
+              <textarea
+                value={content}
+                onChange={(e) => setContent(e.target.value)}
+                className="w-full h-full min-h-[300px] bg-bg border border-border rounded-lg p-4 font-mono text-sm text-text resize-none focus:outline-none focus:border-accent"
+                spellCheck={false}
+              placeholder={type === 'mcp' ? 'MCP server JSON config...' : 'File content...'}
             />
           ) : (
             <div className="space-y-3">

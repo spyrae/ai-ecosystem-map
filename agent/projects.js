@@ -2,9 +2,20 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const store = require('./store');
+const { evaluateAssetHealth } = require('./health');
+const { attachCapabilities } = require('./capabilities');
 
 const HOME = process.env.HOME || process.env.USERPROFILE || '';
+
+function stableProjectAssetId(projectPath, type, name, filePath = '', environmentId = 'local') {
+  return crypto
+    .createHash('sha1')
+    .update(`${environmentId}:${projectPath}:${type}:${name}:${filePath}`)
+    .digest('hex')
+    .slice(0, 12);
+}
 
 /**
  * Known config markers that indicate a project uses AI tools
@@ -52,10 +63,24 @@ function detectProjectProviders(projectPath) {
 /**
  * Scan a single project directory for local AI assets
  */
-function scanProjectAssets(projectPath) {
+function scanProjectAssets(projectPath, options = {}) {
   const { parseFrontmatter } = require('./parser');
   const assets = [];
   const projectName = path.basename(projectPath);
+  const environmentId = options.environmentId || 'local';
+  const environmentType = options.environmentType || 'local';
+  const pushAsset = (asset) => {
+    const normalized = {
+      id: stableProjectAssetId(projectPath, asset.type, asset.name, asset.filePath || '', environmentId),
+      environment_id: environmentId,
+      environment_type: environmentType,
+      ...asset,
+    };
+    assets.push(attachCapabilities({
+      ...normalized,
+      health: evaluateAssetHealth(normalized, { isLocalEnvironment: true }),
+    }, { projectRoot: projectPath }));
+  };
 
   // Local .claude/commands/ (project-level skills)
   const localCommands = path.join(projectPath, '.claude', 'commands');
@@ -63,7 +88,7 @@ function scanProjectAssets(projectPath) {
     for (const file of findMdFilesFlat(localCommands)) {
       const content = fs.readFileSync(file.path, 'utf-8');
       const parsed = parseFrontmatter(content);
-      assets.push({
+      pushAsset({
         name: parsed.name || file.name,
         desc: parsed.description || extractFirstLine(content),
         type: 'skill',
@@ -82,10 +107,29 @@ function scanProjectAssets(projectPath) {
     for (const file of findMdFilesFlat(localAgents)) {
       const content = fs.readFileSync(file.path, 'utf-8');
       const parsed = parseFrontmatter(content);
-      assets.push({
+      pushAsset({
         name: parsed.name || file.name,
         desc: parsed.description || extractFirstLine(content),
         type: 'agent',
+        scope: 'project',
+        projectPath,
+        projectName,
+        filePath: file.path,
+        providers: ['claude'],
+      });
+    }
+  }
+
+  // Local .claude/rules/
+  const claudeRules = path.join(projectPath, '.claude', 'rules');
+  if (fs.existsSync(claudeRules)) {
+    for (const file of findMdFilesFlat(claudeRules)) {
+      const content = fs.readFileSync(file.path, 'utf-8');
+      const parsed = parseFrontmatter(content);
+      pushAsset({
+        name: parsed.name || file.name,
+        desc: parsed.description || extractFirstLine(content),
+        type: 'rule',
         scope: 'project',
         projectPath,
         projectName,
@@ -101,7 +145,7 @@ function scanProjectAssets(projectPath) {
     for (const file of findMdFilesFlat(cursorRules)) {
       const content = fs.readFileSync(file.path, 'utf-8');
       const parsed = parseFrontmatter(content);
-      assets.push({
+      pushAsset({
         name: parsed.name || file.name,
         desc: parsed.description || extractFirstLine(content),
         type: 'rule',
@@ -120,7 +164,7 @@ function scanProjectAssets(projectPath) {
     for (const file of findMdFilesFlat(wsRules)) {
       const content = fs.readFileSync(file.path, 'utf-8');
       const parsed = parseFrontmatter(content);
-      assets.push({
+      pushAsset({
         name: parsed.name || file.name,
         desc: parsed.description || extractFirstLine(content),
         type: 'rule',
@@ -140,14 +184,20 @@ function scanProjectAssets(projectPath) {
       const raw = JSON.parse(fs.readFileSync(localMcp, 'utf-8'));
       const servers = raw.mcpServers || raw.servers || {};
       for (const [name, config] of Object.entries(servers)) {
-        assets.push({
+        pushAsset({
           name,
           desc: config.description || `MCP server: ${name}`,
           type: 'mcp',
           scope: 'project',
           projectPath,
           projectName,
+          filePath: localMcp,
+          rawConfig: config,
           providers: ['claude', 'cursor'],
+          locations: {
+            claude: localMcp,
+            cursor: localMcp,
+          },
         });
       }
     } catch { /* skip */ }
@@ -166,7 +216,7 @@ function scanProjectAssets(projectPath) {
   for (const { file, providers } of instrFiles) {
     const fp = path.join(projectPath, file);
     if (fs.existsSync(fp)) {
-      assets.push({
+      pushAsset({
         name: file.replace(/^\./, '').replace(/\.md$/, '').toLowerCase(),
         desc: extractFirstLine(fs.readFileSync(fp, 'utf-8')) || `${file} instructions`,
         type: 'instruction',

@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 const HOME = process.env.HOME || process.env.USERPROFILE || '';
+const ALL_TOOLS = ['claude', 'codex', 'gemini', 'cursor', 'windsurf', 'copilot', 'continue_dev'];
 
 /**
  * Check if a tool is installed (config directory exists on disk)
@@ -30,6 +31,7 @@ const TOOL_TARGETS = {
   claude: {
     skills: path.join(HOME, '.claude', 'commands'),
     agents: path.join(HOME, '.claude', 'agents'),
+    rules: path.join(HOME, '.claude', 'rules'),
     mcp: path.join(HOME, '.claude'), // .mcp.json
   },
   codex: {
@@ -72,8 +74,28 @@ function getTargetPath(tool, itemType, itemName, projectRoot) {
   }
 
   if (itemType === 'rule') {
+    if (tool === 'claude' && targets.rules) return path.join(targets.rules, fileName);
     if (tool === 'cursor' && projectRoot) return path.join(projectRoot, '.cursor', 'rules', fileName);
     if (tool === 'windsurf' && projectRoot) return path.join(projectRoot, '.windsurf', 'rules', fileName);
+  }
+
+  if (itemType === 'instruction') {
+    switch (tool) {
+      case 'claude':
+        return path.join(HOME, '.claude', 'CLAUDE.md');
+      case 'codex':
+        return path.join(HOME, '.codex', 'instructions.md');
+      case 'gemini':
+        return path.join(HOME, '.gemini', 'instructions.md');
+      case 'copilot':
+        return projectRoot ? path.join(projectRoot, '.github', 'copilot-instructions.md') : null;
+      case 'cursor':
+        return projectRoot ? path.join(projectRoot, '.cursorrules') : null;
+      case 'windsurf':
+        return projectRoot ? path.join(projectRoot, '.windsurfrules') : null;
+      default:
+        return null;
+    }
   }
 
   // MCP servers are handled differently (JSON config, not file copy)
@@ -230,58 +252,84 @@ function disconnect(tool, itemType, itemName, projectRoot) {
 /**
  * Check which tools an item is currently connected to
  */
-function getConnections(sourcePath, itemType, itemName, projectRoot) {
+function getConnections(sourcePath, itemType, itemName, projectRoot, locations = null) {
   const connections = {};
   const MCP_TOOLS = ['claude', 'codex', 'gemini', 'cursor', 'windsurf', 'continue_dev'];
+  const sourceLocations = locations && typeof locations === 'object'
+    ? new Set(Object.values(locations).filter(Boolean).map(p => path.resolve(p)))
+    : new Set(sourcePath ? [path.resolve(sourcePath)] : []);
 
-  for (const tool of Object.keys(TOOL_TARGETS)) {
-    // Skip tools that aren't installed
-    if (!isToolInstalled(tool)) continue;
+  for (const tool of ALL_TOOLS) {
+    const installed = isToolInstalled(tool);
 
     // MCP servers: check JSON config
     if (itemType === 'mcp') {
+      const configPath = getMcpConfigPath(tool, projectRoot);
+      const supported = MCP_TOOLS.includes(tool) && !!configPath;
+
       if (!MCP_TOOLS.includes(tool)) {
-        connections[tool] = { supported: false };
+        connections[tool] = { installed, supported: false, connected: false };
         continue;
       }
-      const configPath = getMcpConfigPath(tool, projectRoot);
-      if (!configPath) { connections[tool] = { supported: false }; continue; }
+      if (!configPath) {
+        connections[tool] = { installed, supported: false, connected: false };
+        continue;
+      }
+
+      if (!installed) {
+        connections[tool] = { installed: false, supported, connected: false, targetPath: configPath };
+        continue;
+      }
 
       if (!fs.existsSync(configPath)) {
-        connections[tool] = { supported: true, connected: false };
+        connections[tool] = { installed, supported, connected: false, targetPath: configPath };
         continue;
       }
       try {
         const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
         const key = tool === 'continue_dev' ? 'servers' : 'mcpServers';
         const connected = !!(config[key] && config[key][itemName]);
-        connections[tool] = { supported: true, connected, isSymlink: false };
+        connections[tool] = {
+          installed,
+          supported,
+          connected,
+          isSymlink: false,
+          isSource: sourceLocations.has(path.resolve(configPath)),
+          targetPath: configPath,
+        };
       } catch {
-        connections[tool] = { supported: true, connected: false };
+        connections[tool] = { installed, supported, connected: false, targetPath: configPath };
       }
       continue;
     }
 
     // Skills, agents, rules: check file existence
     const targetPath = getTargetPath(tool, itemType, itemName, projectRoot);
+    const supported = Boolean(targetPath && targetPath !== '__mcp__');
     if (!targetPath || targetPath === '__mcp__') {
-      connections[tool] = { supported: false };
+      connections[tool] = { installed, supported: false, connected: false };
+      continue;
+    }
+
+    if (!installed) {
+      connections[tool] = { installed: false, supported, connected: false, targetPath };
       continue;
     }
 
     if (!fs.existsSync(targetPath)) {
-      connections[tool] = { supported: true, connected: false };
+      connections[tool] = { installed, supported, connected: false, targetPath };
       continue;
     }
 
     const stat = fs.lstatSync(targetPath);
     const isSymlink = stat.isSymbolicLink();
 
-    // Detect if this is the source (original file, not a symlink)
-    const isSource = !isSymlink && sourcePath && path.resolve(targetPath) === path.resolve(sourcePath);
+    const resolvedTarget = path.resolve(targetPath);
+    const isSource = !isSymlink && sourceLocations.has(resolvedTarget);
 
     connections[tool] = {
-      supported: true,
+      installed,
+      supported,
       connected: true,
       isSymlink,
       isSource: isSource || false,
@@ -305,4 +353,16 @@ function availableTools(itemType) {
   return tools;
 }
 
-module.exports = { connect, disconnect, getConnections, connectMcp, disconnectMcp, availableTools, isToolInstalled, TOOL_TARGETS };
+module.exports = {
+  connect,
+  disconnect,
+  getConnections,
+  connectMcp,
+  disconnectMcp,
+  getTargetPath,
+  getMcpConfigPath,
+  availableTools,
+  isToolInstalled,
+  TOOL_TARGETS,
+  ALL_TOOLS,
+};

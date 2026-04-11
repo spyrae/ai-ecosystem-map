@@ -99,13 +99,15 @@ final class APIClient: @unchecked Sendable {
         return response.data ?? []
     }
 
-    func fetchAssetContent(name: String) async throws -> (content: String, filePath: String) {
-        let response: AssetContentResponse = try await get("api/assets/\(name.urlEncoded)/content")
+    func fetchAssetContent(assetId: String, type: AssetType? = nil) async throws -> (content: String, filePath: String) {
+        var params: [String: String] = [:]
+        if let type { params["type"] = type.rawValue }
+        let response: AssetContentResponse = try await get("api/assets/\(assetId.urlEncoded)/content", params: params)
         return (response.content, response.filePath)
     }
 
-    func updateAssetContent(name: String, content: String) async throws {
-        let _: APIResult = try await put("api/assets/\(name.urlEncoded)/content", body: ["content": content])
+    func updateAssetContent(assetId: String, content: String, type: AssetType? = nil) async throws {
+        let _: APIResult = try await put("api/assets/\(assetId.urlEncoded)/content", body: UpdateAssetContentBody(content: content, type: type?.rawValue))
     }
 
     func createAsset(
@@ -116,7 +118,7 @@ final class APIClient: @unchecked Sendable {
         scope: String? = nil,
         config: [String: String]? = nil
     ) async throws -> String {
-        let body = CreateAssetBody(name: name, type: type.rawValue, content: content, provider: provider, scope: scope)
+        let body = CreateAssetBody(name: name, type: type.rawValue, content: content, provider: provider, scope: scope, config: config)
         let response: CreateAssetResponse = try await post("api/assets/create", body: body)
         return response.filePath ?? ""
     }
@@ -127,28 +129,33 @@ final class APIClient: @unchecked Sendable {
         return response.content ?? ""
     }
 
-    func deleteAsset(name: String, type: AssetType) async throws {
-        let _: APIResult = try await delete("api/assets/\(name.urlEncoded)", params: ["type": type.rawValue])
+    func deleteAsset(assetId: String, type: AssetType) async throws {
+        let _: APIResult = try await delete("api/assets/\(assetId.urlEncoded)", params: ["type": type.rawValue])
     }
 
     // MARK: - Connections
 
-    func fetchConnections(name: String, type: AssetType) async throws -> [String: ConnectionInfo] {
-        try await get("api/assets/\(name.urlEncoded)/connections", params: ["type": type.rawValue])
+    func fetchConnections(assetId: String, type: AssetType) async throws -> [String: ConnectionInfo] {
+        try await get("api/assets/\(assetId.urlEncoded)/connections", params: ["type": type.rawValue])
     }
 
-    func connect(name: String, tool: String, type: AssetType) async throws {
-        let _: APIResult = try await post("api/connect", body: ConnectBody(name: name, tool: tool, type: type.rawValue))
+    func connect(assetId: String, tool: String, type: AssetType) async throws {
+        let _: APIResult = try await post("api/connect", body: ConnectBody(assetId: assetId, tool: tool, type: type.rawValue))
     }
 
-    func disconnect(name: String, tool: String, type: AssetType) async throws {
-        let _: APIResult = try await post("api/disconnect", body: ConnectBody(name: name, tool: tool, type: type.rawValue))
+    func disconnect(assetId: String, tool: String, type: AssetType) async throws {
+        let _: APIResult = try await post("api/disconnect", body: ConnectBody(assetId: assetId, tool: tool, type: type.rawValue))
     }
 
     // MARK: - Stats & Meta
 
     func fetchStats() async throws -> Stats {
         let response: APIResponse<Stats> = try await get("api/stats")
+        return response.data!
+    }
+
+    func fetchTopology() async throws -> TopologyGraph {
+        let response: APIResponse<TopologyGraph> = try await get("api/topology")
         return response.data!
     }
 
@@ -165,6 +172,14 @@ final class APIClient: @unchecked Sendable {
     func fetchHistory(limit: Int = 50) async throws -> [HistoryEntry] {
         let response: APIResponse<[HistoryEntry]> = try await get("api/history", params: ["limit": String(limit)])
         return response.data ?? []
+    }
+
+    func rollbackHistoryEntry(_ historyId: Int) async throws {
+        let _: APIResult = try await post("api/history/\(historyId)/rollback", body: EmptyBody())
+    }
+
+    func undoLastAction() async throws {
+        let _: APIResult = try await post("api/undo", body: EmptyBody())
     }
 
     func rescan() async throws -> Int {
@@ -191,6 +206,16 @@ final class APIClient: @unchecked Sendable {
 
     func fetchProjectAssets(path: String) async throws -> [ProjectAsset] {
         let response: APIResponse<[ProjectAsset]> = try await get("api/projects/\(path.urlEncoded)/assets")
+        return response.data ?? []
+    }
+
+    func fetchProjectAssets(projectId: String) async throws -> [ProjectAsset] {
+        let response: APIResponse<[ProjectAsset]> = try await get("api/projects/\(projectId.urlEncoded)/assets-by-id")
+        return response.data ?? []
+    }
+
+    func discoverRemoteProjects(serverId: String, dirs: [String] = []) async throws -> [Project] {
+        let response: APIResponse<[Project]> = try await post("api/servers/\(serverId)/projects/discover", body: ["dirs": dirs])
         return response.data ?? []
     }
 
@@ -222,22 +247,75 @@ final class APIClient: @unchecked Sendable {
         return response.data!
     }
 
-    func pushToServer(id: String, name: String, type: AssetType) async throws {
-        let _: APIResult = try await post("api/servers/\(id)/push", body: PushPullBody(name: name, type: type.rawValue, remotePath: nil))
+    func previewSync(_ request: SyncRequestPayload) async throws -> SyncPlan {
+        let response: SyncPreviewResponse = try await post("api/sync/preview", body: request)
+        return response.plan
     }
 
-    func pullFromServer(id: String, remotePath: String, type: AssetType) async throws {
-        let _: APIResult = try await post("api/servers/\(id)/pull", body: PushPullBody(name: nil, type: type.rawValue, remotePath: remotePath))
+    func applySync(_ request: SyncRequestPayload) async throws -> SyncApplyResponse {
+        try await post("api/sync/apply", body: request)
+    }
+
+    func validateBatch(_ items: [BatchActionItem]) async throws -> BatchActionResult {
+        try await post("api/batch/validate", body: BatchItemsBody(items: items))
+    }
+
+    func connectBatch(_ items: [BatchActionItem], tool: String) async throws -> BatchActionResult {
+        try await post("api/batch/connect", body: BatchToolBody(items: items, tool: tool))
+    }
+
+    func disconnectBatch(_ items: [BatchActionItem], tool: String) async throws -> BatchActionResult {
+        try await post("api/batch/disconnect", body: BatchToolBody(items: items, tool: tool))
+    }
+
+    func deleteBatch(_ items: [BatchActionItem]) async throws -> BatchActionResult {
+        try await post("api/batch/delete", body: BatchItemsBody(items: items))
+    }
+
+    func previewBatchSync(_ requests: [SyncRequestPayload]) async throws -> BatchSyncPreview {
+        try await post("api/batch/sync/preview", body: BatchSyncBody(requests: requests))
+    }
+
+    func applyBatchSync(_ requests: [SyncRequestPayload]) async throws -> BatchSyncApplyResult {
+        try await post("api/batch/sync/apply", body: BatchSyncBody(requests: requests))
+    }
+
+    func pushToServer(id: String, asset: Asset) async throws {
+        _ = try await applySync(SyncRequestPayload(
+            source: SyncSourceInput(
+                assetId: asset.id,
+                name: asset.name,
+                type: asset.type.rawValue,
+                filePath: asset.filePath,
+                providers: asset.providers,
+                projectPath: nil
+            ),
+            target: SyncTargetInput(kind: "server", projectPath: nil, method: nil, serverId: id, direction: "push")
+        ))
+    }
+
+    func pullFromServer(id: String, asset: Asset) async throws {
+        _ = try await applySync(SyncRequestPayload(
+            source: SyncSourceInput(
+                assetId: asset.id,
+                name: asset.name,
+                type: asset.type.rawValue,
+                filePath: asset.filePath,
+                providers: asset.providers,
+                projectPath: nil
+            ),
+            target: SyncTargetInput(kind: "server", projectPath: nil, method: nil, serverId: id, direction: "pull")
+        ))
     }
 
     // MARK: - MCP
 
-    func fetchMcpConfig(name: String) async throws -> McpConfig {
-        try await get("api/mcp/\(name.urlEncoded)/config")
+    func fetchMcpConfig(assetId: String) async throws -> McpConfig {
+        try await get("api/mcp/\(assetId.urlEncoded)/config")
     }
 
-    func listMcpTools(name: String) async throws -> [McpTool] {
-        let response: McpToolsResponse = try await post("api/mcp/\(name.urlEncoded)/tools", body: EmptyBody())
+    func listMcpTools(assetId: String) async throws -> [McpTool] {
+        let response: McpToolsResponse = try await post("api/mcp/\(assetId.urlEncoded)/tools", body: EmptyBody())
         return response.tools ?? []
     }
 
@@ -263,9 +341,18 @@ final class APIClient: @unchecked Sendable {
         return response.tools ?? []
     }
 
-    func moveAsset(sourcePath: String, name: String, type: AssetType, targetProjectPath: String, method: String) async throws {
-        let body = MoveAssetBody(sourcePath: sourcePath, name: name, type: type.rawValue, targetProjectPath: targetProjectPath, method: method)
-        let _: APIResult = try await post("api/assets/move", body: body)
+    func moveAsset(asset: ProjectAsset, targetProjectPath: String, method: String) async throws {
+        _ = try await applySync(SyncRequestPayload(
+            source: SyncSourceInput(
+                assetId: asset.id,
+                name: asset.name,
+                type: asset.type.rawValue,
+                filePath: asset.filePath,
+                providers: asset.providers,
+                projectPath: asset.projectPath
+            ),
+            target: SyncTargetInput(kind: "project", projectPath: targetProjectPath, method: method, serverId: nil, direction: nil)
+        ))
     }
 }
 
@@ -279,6 +366,14 @@ private struct APIResponse<T: Decodable>: Decodable {
 
 private struct APIResult: Decodable {
     let ok: Bool
+    let error: String?
+}
+
+struct SyncApplyResponse: Decodable {
+    let ok: Bool
+    let plan: SyncPlan?
+    let applied: Int?
+    let skipped: Int?
     let error: String?
 }
 
@@ -331,9 +426,14 @@ private struct McpToolsResponse: Decodable {
 private struct EmptyBody: Encodable {}
 
 private struct ConnectBody: Encodable {
-    let name: String
+    let assetId: String
     let tool: String
     let type: String
+}
+
+private struct UpdateAssetContentBody: Encodable {
+    let content: String
+    let type: String?
 }
 
 private struct CreateAssetBody: Encodable {
@@ -342,6 +442,7 @@ private struct CreateAssetBody: Encodable {
     let content: String?
     let provider: String?
     let scope: String?
+    let config: [String: String]?
 }
 
 private struct GenerateBody: Encodable {
@@ -365,18 +466,61 @@ private struct AddRunningAgentBody: Encodable {
     let `protocol`: String
 }
 
+private struct BatchItemsBody: Encodable {
+    let items: [BatchActionItem]
+}
+
+private struct BatchToolBody: Encodable {
+    let items: [BatchActionItem]
+    let tool: String
+}
+
+private struct BatchSyncBody: Encodable {
+    let requests: [SyncRequestPayload]
+}
+
+struct SyncSourceInput: Codable {
+    let assetId: String?
+    let name: String
+    let type: String
+    let filePath: String?
+    let providers: [String]?
+    let projectPath: String?
+}
+
+struct SyncTargetInput: Codable {
+    let kind: String
+    let projectPath: String?
+    let method: String?
+    let serverId: String?
+    let direction: String?
+}
+
+struct SyncRequestPayload: Codable {
+    let source: SyncSourceInput
+    let target: SyncTargetInput
+}
+
+private struct SyncPreviewResponse: Decodable {
+    let ok: Bool
+    let plan: SyncPlan
+}
+
 private struct PushPullBody: Encodable {
+    let assetId: String?
     let name: String?
     let type: String
     let remotePath: String?
 }
 
 private struct MoveAssetBody: Encodable {
-    let sourcePath: String
+    let assetId: String?
+    let sourcePath: String?
     let name: String
     let type: String
     let targetProjectPath: String
     let method: String
+    let provider: String?
 }
 
 // MARK: - Errors

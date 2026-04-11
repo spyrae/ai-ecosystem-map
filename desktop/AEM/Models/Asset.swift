@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 // MARK: - Asset Types
 
@@ -70,9 +71,31 @@ enum Provider: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+enum AssetHealthFilter: String, CaseIterable, Identifiable {
+    case broken
+    case warning
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .broken: "Broken"
+        case .warning: "Warnings"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .broken: "exclamationmark.octagon.fill"
+        case .warning: "exclamationmark.triangle.fill"
+        }
+    }
+}
+
 // MARK: - Asset
 
 struct Asset: Codable, Identifiable, Hashable {
+    let id: String
     let name: String
     let type: AssetType
     let desc: String
@@ -87,16 +110,44 @@ struct Asset: Codable, Identifiable, Hashable {
     let environment_id: String?
     let discovered_at: Double?
     let updated_at: Double?
-
-    // API may not return id — use name as fallback
-    var id: String { name }
+    let health: AssetHealth?
+    let capabilities: AssetCapabilities?
 
     func hash(into hasher: inout Hasher) {
-        hasher.combine(name)
+        hasher.combine(id)
     }
 
     static func == (lhs: Asset, rhs: Asset) -> Bool {
-        lhs.name == rhs.name
+        lhs.id == rhs.id
+    }
+
+    private func hasBlockingHealthIssue(codes: Set<String>? = nil) -> Bool {
+        guard let health else { return false }
+        return health.issues.contains { issue in
+            issue.level == "blocking" && (codes == nil || codes!.contains(issue.code))
+        }
+    }
+
+    var canConnect: Bool {
+        !hasBlockingHealthIssue()
+    }
+
+    var canEdit: Bool {
+        if type == .mcp {
+            return !hasBlockingHealthIssue(codes: ["missing_config", "missing_path", "missing_file", "broken_symlink"])
+        }
+        return filePath != nil && !(filePath?.isEmpty ?? true) && !hasBlockingHealthIssue(codes: ["missing_path", "missing_file", "broken_symlink"])
+    }
+
+    var canDelete: Bool {
+        if type == .mcp {
+            return !hasBlockingHealthIssue(codes: ["missing_config"])
+        }
+        return filePath != nil && !(filePath?.isEmpty ?? true) && !hasBlockingHealthIssue(codes: ["missing_path", "missing_file"])
+    }
+
+    var canInspectMcpTools: Bool {
+        type == .mcp && !hasBlockingHealthIssue()
     }
 }
 
@@ -117,9 +168,11 @@ struct Stats: Codable {
 struct ConnectionInfo: Codable {
     let connected: Bool
     let method: String?
+    let installed: Bool?
     let supported: Bool?
     let isSource: Bool?
     let isSymlink: Bool?
+    let targetPath: String?
 }
 
 // MARK: - History
@@ -131,6 +184,9 @@ struct HistoryEntry: Codable, Identifiable {
     let details: String
     let created_at: Double
     let reverted: Int
+    let snapshot_id: String?
+    let can_rollback: Bool?
+    let rolled_back_at: Double?
 }
 
 // MARK: - Provider Stat
@@ -150,6 +206,8 @@ struct Project: Codable, Identifiable {
     let name: String
     let path: String
     let environment_id: String
+    let environment_name: String?
+    let environment_type: String?
     let last_scanned_at: Double?
     let created_at: Double
     let providers: [String]?
@@ -158,16 +216,107 @@ struct Project: Codable, Identifiable {
 }
 
 struct ProjectAsset: Codable, Identifiable {
+    let id: String
     let name: String
     let desc: String
     let type: AssetType
     let scope: String // "global" | "project"
     let projectPath: String
     let projectName: String
+    let environment_id: String?
+    let environment_type: String?
     let filePath: String?
     let providers: [String]
+    let health: AssetHealth?
+    let capabilities: AssetCapabilities?
+}
 
-    var id: String { "\(projectPath)/\(name)" }
+struct HealthIssue: Codable, Hashable, Identifiable {
+    let level: String
+    let code: String
+    let message: String
+
+    var id: String { "\(level):\(code):\(message)" }
+}
+
+struct AssetHealth: Codable, Hashable {
+    let status: String
+    let issueCount: Int
+    let hasBlocking: Bool
+    let summary: String
+    let issues: [HealthIssue]
+}
+
+enum CapabilityState: String, Codable, Hashable {
+    case active
+    case configured
+    case available
+    case missing
+    case unsupported
+    case invalid
+
+    var label: String {
+        switch self {
+        case .active: "Active"
+        case .configured: "Configured"
+        case .available: "Available"
+        case .missing: "Missing"
+        case .unsupported: "Unsupported"
+        case .invalid: "Invalid"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .active: .blue
+        case .configured: .green
+        case .available: .secondary
+        case .missing: .orange
+        case .unsupported: .secondary
+        case .invalid: .red
+        }
+    }
+}
+
+struct AssetCapabilitySummary: Codable, Hashable {
+    let total: Int
+    let active: Int
+    let configured: Int
+    let available: Int
+    let missing: Int
+    let unsupported: Int
+    let invalid: Int
+
+    var compactItems: [String] {
+        [
+            active > 0 ? "\(active) active" : nil,
+            configured > 0 ? "\(configured) configured" : nil,
+            available > 0 ? "\(available) available" : nil,
+            invalid > 0 ? "\(invalid) invalid" : nil,
+            missing > 0 ? "\(missing) missing" : nil,
+            unsupported > 0 ? "\(unsupported) unsupported" : nil
+        ].compactMap { $0 }
+    }
+}
+
+struct AssetCapabilityEntry: Codable, Hashable, Identifiable {
+    let provider: String
+    let label: String
+    let state: CapabilityState
+    let installed: Bool
+    let supported: Bool
+    let connected: Bool
+    let isSource: Bool
+    let isSymlink: Bool
+    let targetPath: String?
+    let detail: String
+
+    var id: String { provider }
+}
+
+struct AssetCapabilities: Codable, Hashable {
+    let summary: AssetCapabilitySummary
+    let providers: [AssetCapabilityEntry]
 }
 
 // MARK: - Server Environment
@@ -193,11 +342,144 @@ struct DiffResult: Codable {
     let both: [DiffPair]
     let localCount: Int
     let remoteCount: Int
+    let sameCount: Int?
+    let driftedCount: Int?
+    let reasonCounts: [String: Int]?
 }
 
 struct DiffPair: Codable {
     let local: Asset
     let remote: Asset
+    let status: String
+    let reasons: [DiffReason]
+    let summary: String
+}
+
+struct DiffReason: Codable, Hashable, Identifiable {
+    let code: String
+    let message: String
+
+    var id: String { "\(code):\(message)" }
+}
+
+// MARK: - Sync
+
+struct SyncSourceSummary: Codable {
+    let assetId: String?
+    let name: String?
+    let type: String?
+    let filePath: String?
+}
+
+struct SyncTargetSummary: Codable {
+    let kind: String
+    let label: String?
+    let projectPath: String?
+    let method: String?
+    let serverId: String?
+    let direction: String?
+}
+
+struct SyncOperation: Codable, Identifiable {
+    let id: String
+    let action: String
+    let mode: String
+    let summary: String
+    let sourcePath: String?
+    let targetPath: String?
+    let targetPathRemote: String?
+    let assetName: String?
+}
+
+struct SyncIssue: Codable, Identifiable {
+    let level: String
+    let code: String
+    let message: String
+
+    var id: String { "\(level):\(code):\(message)" }
+}
+
+struct SyncPlan: Codable {
+    let source: SyncSourceSummary?
+    let target: SyncTargetSummary?
+    let operations: [SyncOperation]
+    let issues: [SyncIssue]
+    let canApply: Bool
+    let hasChanges: Bool
+}
+
+struct BatchActionItem: Codable, Hashable, Identifiable {
+    let assetId: String?
+    let name: String
+    let type: String
+    let filePath: String?
+    let providers: [String]?
+    let projectPath: String?
+    let scope: String?
+
+    var id: String { assetId ?? "\(type):\(name)" }
+}
+
+struct BatchActionResultItem: Codable, Hashable, Identifiable {
+    let id: String
+    let name: String
+    let type: String
+    let ok: Bool
+    let filePath: String?
+    let message: String?
+    let error: String?
+    let health: AssetHealth?
+    let status: String?
+}
+
+struct BatchActionResult: Codable {
+    let ok: Bool
+    let total: Int
+    let successCount: Int?
+    let failureCount: Int?
+    let okCount: Int?
+    let warningCount: Int?
+    let brokenCount: Int?
+    let results: [BatchActionResultItem]
+}
+
+struct BatchSyncPreviewItem: Codable, Identifiable {
+    let id: String
+    let name: String
+    let ok: Bool
+    let plan: SyncPlan?
+    let error: String?
+}
+
+struct BatchSyncPreview: Codable {
+    let ok: Bool
+    let total: Int
+    let readyCount: Int
+    let blockedCount: Int
+    let hasChangesCount: Int
+    let operationCount: Int
+    let results: [BatchSyncPreviewItem]
+}
+
+struct BatchSyncApplyItem: Codable, Identifiable {
+    let id: String
+    let name: String
+    let ok: Bool
+    let plan: SyncPlan?
+    let error: String?
+    let applied: Int?
+    let skipped: Int?
+    let message: String?
+}
+
+struct BatchSyncApplyResult: Codable {
+    let ok: Bool
+    let total: Int
+    let appliedCount: Int
+    let skippedCount: Int
+    let successCount: Int
+    let failureCount: Int
+    let results: [BatchSyncApplyItem]
 }
 
 // MARK: - MCP
@@ -231,6 +513,65 @@ struct RunningAgent: Codable, Identifiable {
         case protocol_type = "protocol"
         case is_active, created_at
     }
+}
+
+// MARK: - Topology
+
+struct TopologyNodeSummary: Codable, Hashable {
+    let relatedCount: Int?
+    let assetCount: Int?
+    let projectCount: Int?
+    let providerCount: Int?
+    let environmentCount: Int?
+    let agentCount: Int?
+    let activeCount: Int?
+    let configuredCount: Int?
+    let missingCount: Int?
+    let invalidCount: Int?
+    let warningCount: Int?
+    let brokenCount: Int?
+    let dependencyCount: Int?
+}
+
+struct TopologyNode: Codable, Hashable, Identifiable {
+    let id: String
+    let kind: String
+    let label: String
+    let subtitle: String?
+    let environmentId: String?
+    let projectId: String?
+    let assetId: String?
+    let provider: String?
+    let assetType: AssetType?
+    let status: String?
+    let badges: [String]?
+    let summary: TopologyNodeSummary?
+}
+
+struct TopologyEdge: Codable, Hashable, Identifiable {
+    let id: String
+    let kind: String
+    let from: String
+    let to: String
+    let label: String?
+    let state: CapabilityState?
+}
+
+struct TopologySummary: Codable, Hashable {
+    let nodeCount: Int
+    let edgeCount: Int
+    let machineCount: Int
+    let remoteServerCount: Int
+    let providerCount: Int
+    let projectCount: Int
+    let runningAgentCount: Int
+    let assetCount: Int
+}
+
+struct TopologyGraph: Codable, Hashable {
+    let nodes: [TopologyNode]
+    let edges: [TopologyEdge]
+    let summary: TopologySummary
 }
 
 // MARK: - AnyCodable helper

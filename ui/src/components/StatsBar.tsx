@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Stats } from '../types';
+import type { AssetHealthStatus, Stats } from '../types';
 
 function AnimatedNumber({ value, duration = 600 }: { value: number; duration?: number }) {
   const [display, setDisplay] = useState(0);
@@ -28,9 +28,10 @@ function AnimatedNumber({ value, duration = 600 }: { value: number; duration?: n
 
 interface StatsBarProps {
   stats: Stats | null;
+  healthCounts?: Record<AssetHealthStatus, number>;
 }
 
-export function StatsBar({ stats }: StatsBarProps) {
+export function StatsBar({ stats, healthCounts }: StatsBarProps) {
   if (!stats) return null;
 
   const items = [
@@ -39,6 +40,8 @@ export function StatsBar({ stats }: StatsBarProps) {
     { label: 'Agents', value: stats.agent || 0, color: 'text-violet-400' },
     { label: 'MCP Servers', value: stats.mcp || 0, color: 'text-orange-400' },
     { label: 'Orchestrators', value: stats.orchestrator || 0, color: 'text-amber-400' },
+    { label: 'Broken', value: healthCounts?.broken || 0, color: 'text-red' },
+    { label: 'Warnings', value: healthCounts?.warning || 0, color: 'text-amber-300' },
   ];
 
   return (

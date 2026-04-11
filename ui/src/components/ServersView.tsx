@@ -1,9 +1,14 @@
-import { useEffect, useState } from 'react';
-import type { Environment, DiffResult } from '../types';
-import { fetchServers, addServer, testServer, scanServer, diffServer, pushToServer } from '../lib/api';
+import { useEffect, useMemo, useState } from 'react';
+import type { Asset, AssetType, BatchSyncPreview, DiffPair, DiffResult, Environment, Provider, SyncPlan, SyncRequest, TopologyGraph } from '../types';
+import { PROVIDER_LABELS, TYPE_LABELS } from '../types';
+import { fetchServers, fetchTopology, addServer, testServer, scanServer, diffServer, previewSync, applySync, previewBatchSync, applyBatchSync, discoverRemoteProjects } from '../lib/api';
+import { getEnvironmentTopologyNode } from '../lib/topology';
+import { SyncPlanModal } from './SyncPlanModal';
+import { BatchSyncPlanModal } from './BatchSyncPlanModal';
 
 export function ServersView() {
   const [servers, setServers] = useState<Environment[]>([]);
+  const [topology, setTopology] = useState<TopologyGraph | null>(null);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [form, setForm] = useState({ name: '', ssh_host: '', ssh_user: '', ssh_port: '22', ssh_key_path: '' });
@@ -11,14 +16,26 @@ export function ServersView() {
   const [testResults, setTestResults] = useState<Record<string, { ok: boolean; msg: string }>>({});
   const [scanResults, setScanResults] = useState<Record<string, number>>({});
   const [scanning, setScanning] = useState<Record<string, boolean>>({});
+  const [discoveringProjects, setDiscoveringProjects] = useState<Record<string, boolean>>({});
   const [diffData, setDiffData] = useState<Record<string, DiffResult>>({});
   const [expandedServer, setExpandedServer] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [syncRequest, setSyncRequest] = useState<SyncRequest | null>(null);
+  const [syncPlan, setSyncPlan] = useState<SyncPlan | null>(null);
+  const [syncTitle, setSyncTitle] = useState('');
+  const [syncLoading, setSyncLoading] = useState(false);
+  const [applyingSync, setApplyingSync] = useState(false);
+  const [batchPreview, setBatchPreview] = useState<BatchSyncPreview | null>(null);
+  const [batchRequests, setBatchRequests] = useState<SyncRequest[] | null>(null);
+  const [batchTitle, setBatchTitle] = useState('');
+  const [batchLoading, setBatchLoading] = useState(false);
+  const [applyingBatchSync, setApplyingBatchSync] = useState(false);
 
   const loadServers = async () => {
     try {
-      const res = await fetchServers();
+      const [res, topologyRes] = await Promise.all([fetchServers(), fetchTopology()]);
       setServers(res.data);
+      setTopology(topologyRes.data);
     } catch (err) {
       console.error('Failed to load servers:', err);
     } finally {
@@ -101,18 +118,138 @@ export function ServersView() {
     }
   };
 
-  const handlePush = async (serverId: string, name: string, type: string) => {
+  const handleDiscoverProjects = async (id: string) => {
+    setDiscoveringProjects((prev) => ({ ...prev, [id]: true }));
     try {
-      const res = await pushToServer(serverId, name, type);
-      if (res.ok) showToast(`Pushed ${name} to remote`);
-      else showToast(`Error: ${res.error}`);
+      const res = await discoverRemoteProjects(id);
+      showToast(
+        res.data.length > 0
+          ? `Discovered ${res.data.length} remote projects`
+          : 'No remote projects with AI tooling found'
+      );
     } catch (err) {
-      showToast('Push failed');
+      console.error('Remote project discovery failed:', err);
+      showToast('Remote project discovery failed');
+    } finally {
+      setDiscoveringProjects((prev) => ({ ...prev, [id]: false }));
     }
+  };
+
+  const openSyncPreview = async (request: SyncRequest, title: string) => {
+    setSyncLoading(true);
+    try {
+      const res = await previewSync(request);
+      setSyncRequest(request);
+      setSyncPlan(res.plan);
+      setSyncTitle(title);
+    } catch (err) {
+      console.error('Sync preview failed:', err);
+      showToast('Sync preview failed: ' + (err instanceof Error ? err.message : 'Error'));
+    } finally {
+      setSyncLoading(false);
+    }
+  };
+
+  const openBatchSyncPreview = async (requests: SyncRequest[], title: string) => {
+    setBatchLoading(true);
+    try {
+      const result = await previewBatchSync(requests);
+      setBatchRequests(requests);
+      setBatchPreview(result);
+      setBatchTitle(title);
+    } catch (err) {
+      console.error('Batch sync preview failed:', err);
+      showToast('Batch sync preview failed');
+    } finally {
+      setBatchLoading(false);
+    }
+  };
+
+  const refreshExpandedServerDiff = async () => {
+    if (!expandedServer) return;
+    try {
+      const res = await diffServer(expandedServer);
+      setDiffData((prev) => ({ ...prev, [expandedServer]: res.data }));
+    } catch (err) {
+      console.error('Failed to refresh diff:', err);
+    }
+  };
+
+  const handleApplySync = async () => {
+    if (!syncRequest) return;
+    setApplyingSync(true);
+    try {
+      const res = await applySync(syncRequest);
+      if (res.ok) {
+        showToast(`Applied sync for ${syncRequest.source.name}`);
+        setSyncPlan(null);
+        setSyncRequest(null);
+        await refreshExpandedServerDiff();
+      } else {
+        showToast(`Sync failed: ${res.error || 'Unknown error'}`);
+      }
+    } catch (err) {
+      console.error('Apply sync failed:', err);
+      showToast('Sync apply failed');
+    } finally {
+      setApplyingSync(false);
+    }
+  };
+
+  const handleApplyBatchSync = async () => {
+    if (!batchRequests) return;
+    setApplyingBatchSync(true);
+    try {
+      const result = await applyBatchSync(batchRequests);
+      showToast(`Applied batch sync: ${result.successCount}/${result.total} assets`);
+      setBatchPreview(null);
+      setBatchRequests(null);
+      await refreshExpandedServerDiff();
+    } catch (err) {
+      console.error('Apply batch sync failed:', err);
+      showToast('Batch sync apply failed');
+    } finally {
+      setApplyingBatchSync(false);
+    }
+  };
+
+  const handlePush = async (serverId: string, asset: Asset) => {
+    await openSyncPreview({
+      source: {
+        assetId: asset.id,
+        name: asset.name,
+        type: asset.type,
+        filePath: asset.filePath,
+        providers: asset.providers,
+      },
+      target: {
+        kind: 'server',
+        serverId,
+        direction: 'push',
+      },
+    }, `Push ${asset.name} to remote`);
+  };
+
+  const handlePull = async (serverId: string, asset: Asset) => {
+    await openSyncPreview({
+      source: {
+        assetId: asset.id,
+        name: asset.name,
+        type: asset.type,
+        filePath: asset.filePath,
+        providers: asset.providers,
+      },
+      target: {
+        kind: 'server',
+        serverId,
+        direction: 'pull',
+      },
+    }, `Pull ${asset.name} from remote`);
   };
 
   const remoteServers = servers.filter((s) => s.type === 'remote');
   const localServer = servers.find((s) => s.type === 'local');
+  const localTopology = localServer ? getEnvironmentTopologyNode(topology, localServer.id, 'local') : null;
 
   return (
     <div className="p-6">
@@ -191,6 +328,11 @@ export function ServersView() {
                 <div className="flex-1">
                   <div className="text-sm font-semibold">{localServer.name}</div>
                   <div className="text-[11px] text-muted">Local machine</div>
+                  {localTopology?.summary && (
+                    <div className="text-[11px] text-muted mt-0.5">
+                      {(localTopology.summary.projectCount || 0)} projects · {(localTopology.summary.providerCount || 0)} providers · {(localTopology.summary.agentCount || 0)} agents
+                    </div>
+                  )}
                 </div>
                 <span className="text-xs text-muted bg-green/15 text-green px-2 py-0.5 rounded">local</span>
               </div>
@@ -206,7 +348,9 @@ export function ServersView() {
             </div>
           )}
 
-          {remoteServers.map((server) => (
+          {remoteServers.map((server) => {
+            const serverTopology = getEnvironmentTopologyNode(topology, server.id, 'remote');
+            return (
             <div key={server.id}>
               <div className="bg-surface border border-border rounded-lg p-4">
                 <div className="flex items-center gap-3 mb-3">
@@ -218,6 +362,11 @@ export function ServersView() {
                     <div className="text-[11px] text-muted font-mono">
                       {server.ssh_user}@{server.ssh_host}:{server.ssh_port || 22}
                     </div>
+                    {serverTopology?.summary && (
+                      <div className="text-[11px] text-muted mt-0.5">
+                        {(serverTopology.summary.projectCount || 0)} projects · {(serverTopology.summary.providerCount || 0)} providers · {(serverTopology.summary.agentCount || 0)} agents
+                      </div>
+                    )}
                   </div>
                   {scanResults[server.id] !== undefined && (
                     <span className="text-xs text-accent">{scanResults[server.id]} assets</span>
@@ -249,6 +398,13 @@ export function ServersView() {
                     {scanning[server.id] ? 'Scanning...' : 'Scan'}
                   </button>
                   <button
+                    onClick={() => handleDiscoverProjects(server.id)}
+                    disabled={discoveringProjects[server.id]}
+                    className="px-3 py-1.5 text-xs border border-border rounded-lg text-muted hover:text-text hover:border-accent/50 transition-colors disabled:opacity-40"
+                  >
+                    {discoveringProjects[server.id] ? 'Discovering...' : 'Discover Projects'}
+                  </button>
+                  <button
                     onClick={() => handleDiff(server.id)}
                     className={`px-3 py-1.5 text-xs border rounded-lg transition-colors ${
                       expandedServer === server.id
@@ -267,10 +423,13 @@ export function ServersView() {
                   diff={diffData[server.id]}
                   serverId={server.id}
                   onPush={handlePush}
+                  onPull={handlePull}
+                  onBatchSync={openBatchSyncPreview}
                 />
               )}
             </div>
-          ))}
+          );
+          })}
         </div>
       )}
 
@@ -280,11 +439,96 @@ export function ServersView() {
           {toast}
         </div>
       )}
+
+      {(syncPlan || syncLoading) && (
+        <SyncPlanModal
+          plan={syncPlan}
+          applying={applyingSync || syncLoading}
+          title={syncLoading ? 'Building sync preview...' : syncTitle}
+          onApply={handleApplySync}
+          onClose={() => {
+            if (applyingSync || syncLoading) return;
+            setSyncPlan(null);
+            setSyncRequest(null);
+          }}
+        />
+      )}
+
+      {(batchPreview || batchLoading) && (
+        <BatchSyncPlanModal
+          preview={batchPreview}
+          loading={batchLoading}
+          applying={applyingBatchSync}
+          title={batchLoading ? 'Building batch sync preview...' : batchTitle}
+          onApply={handleApplyBatchSync}
+          onClose={() => {
+            if (batchLoading || applyingBatchSync) return;
+            setBatchPreview(null);
+            setBatchRequests(null);
+          }}
+        />
+      )}
     </div>
   );
 }
 
-function DiffView({ diff, serverId, onPush }: { diff: DiffResult; serverId: string; onPush: (id: string, name: string, type: string) => void }) {
+function DiffView({
+  diff,
+  serverId,
+  onPush,
+  onPull,
+  onBatchSync,
+}: {
+  diff: DiffResult;
+  serverId: string;
+  onPush: (id: string, asset: Asset) => void;
+  onPull: (id: string, asset: Asset) => void;
+  onBatchSync: (requests: SyncRequest[], title: string) => Promise<void>;
+}) {
+  const syncableTypes = new Set<Asset['type']>(['skill', 'agent', 'instruction', 'rule', 'mcp']);
+  const [typeFilter, setTypeFilter] = useState<'all' | AssetType>('all');
+  const [providerFilter, setProviderFilter] = useState<'all' | Provider>('all');
+  const providers = useMemo(
+    () => [...new Set([
+      ...diff.onlyLocal.flatMap((asset) => asset.providers),
+      ...diff.onlyRemote.flatMap((asset) => asset.providers),
+      ...diff.both.flatMap((pair) => pair.local.providers),
+    ])].filter(Boolean) as Provider[],
+    [diff]
+  );
+
+  const assetMatchesFilters = (asset: Asset) => {
+    if (typeFilter !== 'all' && asset.type !== typeFilter) return false;
+    if (providerFilter !== 'all' && !asset.providers.includes(providerFilter)) return false;
+    return true;
+  };
+
+  const filteredOnlyLocal = diff.onlyLocal.filter(assetMatchesFilters);
+  const filteredOnlyRemote = diff.onlyRemote.filter(assetMatchesFilters);
+  const filteredDrifted = diff.both.filter((pair) => pair.status === 'drifted' && assetMatchesFilters(pair.local));
+  const filteredSame = diff.both.filter((pair) => pair.status === 'same' && assetMatchesFilters(pair.local));
+
+  const openBatchSync = async (pairs: Asset[] | DiffPair[], direction: 'push' | 'pull', title: string) => {
+    const requests: SyncRequest[] = pairs.map((entry) => {
+      const asset = 'local' in entry ? (direction === 'push' ? entry.local : entry.remote) : entry;
+      return {
+        source: {
+          assetId: asset.id,
+          name: asset.name,
+          type: asset.type,
+          filePath: asset.filePath,
+          providers: asset.providers,
+        },
+        target: {
+          kind: 'server',
+          serverId,
+          direction,
+        },
+      };
+    });
+    await onBatchSync(requests, title);
+  };
+
   return (
     <div className="mt-1 ml-4 border-l-2 border-accent/30 pl-4 py-3 space-y-4">
       <div className="flex gap-4 text-xs text-muted">
@@ -292,21 +536,73 @@ function DiffView({ diff, serverId, onPush }: { diff: DiffResult; serverId: stri
         <span>Remote: <strong className="text-text">{diff.remoteCount}</strong></span>
         <span>Only local: <strong className="text-orange">{diff.onlyLocal.length}</strong></span>
         <span>Only remote: <strong className="text-cyan">{diff.onlyRemote.length}</strong></span>
-        <span>Shared: <strong className="text-green">{diff.both.length}</strong></span>
+        <span>Same: <strong className="text-green">{diff.sameCount ?? 0}</strong></span>
+        <span>Drifted: <strong className="text-amber-300">{diff.driftedCount ?? 0}</strong></span>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <select
+          value={typeFilter}
+          onChange={(event) => setTypeFilter(event.target.value as 'all' | AssetType)}
+          className="rounded-lg border border-border bg-surface px-3 py-1.5 text-xs text-text focus:outline-none focus:border-accent"
+        >
+          <option value="all">All types</option>
+          {Object.entries(TYPE_LABELS).map(([value, label]) => (
+            <option key={value} value={value}>{label}</option>
+          ))}
+        </select>
+        <select
+          value={providerFilter}
+          onChange={(event) => setProviderFilter(event.target.value as 'all' | Provider)}
+          className="rounded-lg border border-border bg-surface px-3 py-1.5 text-xs text-text focus:outline-none focus:border-accent"
+        >
+          <option value="all">All providers</option>
+          {providers.map((provider) => (
+            <option key={provider} value={provider}>{PROVIDER_LABELS[provider]}</option>
+          ))}
+        </select>
+        <button
+          onClick={() => void openBatchSync(filteredOnlyLocal, 'push', `Push ${filteredOnlyLocal.length} assets to remote`)}
+          disabled={filteredOnlyLocal.length === 0}
+          className="rounded-lg border border-orange/30 bg-orange/10 px-3 py-1.5 text-xs font-medium text-orange hover:bg-orange/15 transition-colors disabled:opacity-40"
+        >
+          Push Visible Only-Local
+        </button>
+        <button
+          onClick={() => void openBatchSync(filteredOnlyRemote, 'pull', `Pull ${filteredOnlyRemote.length} assets from remote`)}
+          disabled={filteredOnlyRemote.length === 0}
+          className="rounded-lg border border-cyan/30 bg-cyan/10 px-3 py-1.5 text-xs font-medium text-cyan hover:bg-cyan/15 transition-colors disabled:opacity-40"
+        >
+          Pull Visible Only-Remote
+        </button>
+        <button
+          onClick={() => void openBatchSync(filteredDrifted, 'push', `Push ${filteredDrifted.length} drifted assets`)}
+          disabled={filteredDrifted.length === 0}
+          className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs font-medium text-amber-300 hover:bg-amber-500/15 transition-colors disabled:opacity-40"
+        >
+          Push Visible Drifted
+        </button>
+        <button
+          onClick={() => void openBatchSync(filteredDrifted, 'pull', `Pull ${filteredDrifted.length} drifted assets`)}
+          disabled={filteredDrifted.length === 0}
+          className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs font-medium text-amber-300 hover:bg-amber-500/15 transition-colors disabled:opacity-40"
+        >
+          Pull Visible Drifted
+        </button>
       </div>
 
       {/* Only local — can push */}
-      {diff.onlyLocal.length > 0 && (
+      {filteredOnlyLocal.length > 0 && (
         <div>
           <div className="text-[11px] text-orange uppercase tracking-wider mb-1.5">Only Local (can push →)</div>
           <div className="space-y-1">
-            {diff.onlyLocal.map((a) => (
+            {filteredOnlyLocal.map((a) => (
               <div key={`${a.type}-${a.name}`} className="flex items-center gap-2 px-2 py-1.5 rounded bg-surface text-xs">
                 <span className="font-mono text-accent truncate flex-1">{a.name}</span>
                 <span className="text-muted">{a.type}</span>
-                {(a.type === 'skill' || a.type === 'agent') && (
+                {syncableTypes.has(a.type) && (
                   <button
-                    onClick={() => onPush(serverId, a.name, a.type)}
+                    onClick={() => onPush(serverId, a)}
                     className="px-2 py-0.5 rounded border border-orange/50 text-orange hover:bg-orange/15 transition-colors"
                   >
                     Push →
@@ -319,14 +615,22 @@ function DiffView({ diff, serverId, onPush }: { diff: DiffResult; serverId: stri
       )}
 
       {/* Only remote — can pull */}
-      {diff.onlyRemote.length > 0 && (
+      {filteredOnlyRemote.length > 0 && (
         <div>
           <div className="text-[11px] text-cyan uppercase tracking-wider mb-1.5">Only Remote (← pull)</div>
           <div className="space-y-1">
-            {diff.onlyRemote.map((a) => (
+            {filteredOnlyRemote.map((a) => (
               <div key={`${a.type}-${a.name}`} className="flex items-center gap-2 px-2 py-1.5 rounded bg-surface text-xs">
                 <span className="font-mono text-accent truncate flex-1">{a.name}</span>
                 <span className="text-muted">{a.type}</span>
+                {syncableTypes.has(a.type) && a.filePath && (
+                  <button
+                    onClick={() => onPull(serverId, a)}
+                    className="px-2 py-0.5 rounded border border-cyan/50 text-cyan hover:bg-cyan/15 transition-colors"
+                  >
+                    ← Pull
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -335,13 +639,63 @@ function DiffView({ diff, serverId, onPush }: { diff: DiffResult; serverId: stri
 
       {/* Both */}
       {diff.both.length > 0 && (
-        <div>
-          <div className="text-[11px] text-green uppercase tracking-wider mb-1.5">On both ({diff.both.length})</div>
-          <div className="text-xs text-muted">
-            {diff.both.slice(0, 10).map((b) => b.local.name).join(', ')}
-            {diff.both.length > 10 && ` ...and ${diff.both.length - 10} more`}
-          </div>
-        </div>
+        <>
+          {filteredDrifted.length > 0 && (
+            <div>
+              <div className="text-[11px] text-amber-300 uppercase tracking-wider mb-1.5">
+                Drifted ({filteredDrifted.length})
+              </div>
+              <div className="space-y-1">
+                {filteredDrifted.map((pair) => (
+                  <div key={`${pair.local.type}-${pair.local.name}`} className="rounded bg-surface px-3 py-2 text-xs">
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-accent flex-1 truncate">{pair.local.name}</span>
+                      <span className="text-muted">{pair.local.type}</span>
+                      {syncableTypes.has(pair.local.type) && (
+                        <>
+                          <button
+                            onClick={() => onPush(serverId, pair.local)}
+                            className="px-2 py-0.5 rounded border border-orange/50 text-orange hover:bg-orange/15 transition-colors"
+                          >
+                            Push →
+                          </button>
+                          <button
+                            onClick={() => onPull(serverId, pair.remote)}
+                            className="px-2 py-0.5 rounded border border-cyan/50 text-cyan hover:bg-cyan/15 transition-colors"
+                          >
+                            ← Pull
+                          </button>
+                        </>
+                      )}
+                    </div>
+                    <div className="mt-1 text-[11px] text-muted">{pair.summary}</div>
+                    {pair.reasons.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {pair.reasons.map((reason) => (
+                          <span key={reason.code} className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-300">
+                            {reason.code.replace(/_/g, ' ')}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {filteredSame.length > 0 && (
+            <div>
+              <div className="text-[11px] text-green uppercase tracking-wider mb-1.5">
+                Same on both ({filteredSame.length})
+              </div>
+              <div className="text-xs text-muted">
+                {filteredSame.slice(0, 10).map((pair) => pair.local.name).join(', ')}
+                {filteredSame.length > 10 && ` ...and ${filteredSame.length - 10} more`}
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

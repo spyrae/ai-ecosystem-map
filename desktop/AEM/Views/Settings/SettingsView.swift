@@ -49,9 +49,16 @@ struct SettingsView: View {
             Section("Agent") {
                 LabeledContent("Status", value: agentService.state.label)
                 HStack {
-                    Button("Restart Agent") { agentService.restart() }
+                    Button(agentService.state == .stopped ? "Start Agent" : "Restart Agent") {
+                        if agentService.state == .stopped {
+                            agentService.start()
+                        } else {
+                            agentService.restart()
+                        }
+                    }
                     Button("Stop Agent") { agentService.stop() }
                         .foregroundStyle(.red)
+                        .disabled(agentService.state == .stopped)
                 }
             }
         }

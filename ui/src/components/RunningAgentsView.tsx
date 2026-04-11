@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
-import type { RunningAgent, McpTool } from '../types';
-import { fetchRunningAgents, addRunningAgent, removeRunningAgent, listAgentTools } from '../lib/api';
+import type { RunningAgent, McpTool, TopologyGraph } from '../types';
+import { fetchRunningAgents, fetchTopology, addRunningAgent, removeRunningAgent, listAgentTools } from '../lib/api';
+import { getRunningAgentEnvironmentNode, getRunningAgentTopologyNode } from '../lib/topology';
 
 export function RunningAgentsView() {
   const [agents, setAgents] = useState<RunningAgent[]>([]);
+  const [topology, setTopology] = useState<TopologyGraph | null>(null);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [form, setForm] = useState({ name: '', url: '', description: '', protocol: 'mcp' });
@@ -23,8 +25,9 @@ export function RunningAgentsView() {
 
   const loadAgents = async () => {
     try {
-      const res = await fetchRunningAgents();
+      const [res, topologyRes] = await Promise.all([fetchRunningAgents(), fetchTopology()]);
       setAgents(res.data);
+      setTopology(topologyRes.data);
     } catch (err) {
       console.error('Failed to load agents:', err);
     } finally {
@@ -119,15 +122,8 @@ export function RunningAgentsView() {
           </div>
           <div className="flex items-center gap-3">
             <span className="text-xs text-muted">Protocol:</span>
-            {['mcp', 'openapi', 'custom'].map((p) => (
-              <button
-                key={p}
-                onClick={() => setForm({ ...form, protocol: p })}
-                className={`px-2 py-1 rounded text-xs ${form.protocol === p ? 'bg-accent/15 text-accent' : 'text-muted hover:text-text'}`}
-              >
-                {p.toUpperCase()}
-              </button>
-            ))}
+            <span className="px-2 py-1 rounded text-xs bg-accent/15 text-accent">MCP</span>
+            <span className="text-[11px] text-muted">HTTP MCP endpoint or compatible remote agent</span>
           </div>
           <div className="flex gap-2">
             <button
@@ -157,7 +153,10 @@ export function RunningAgentsView() {
         </div>
       ) : (
         <div className="space-y-3">
-          {agents.map((agent) => (
+          {agents.map((agent) => {
+            const topologyNode = getRunningAgentTopologyNode(topology, agent.id);
+            const environmentNode = getRunningAgentEnvironmentNode(topology, agent.id);
+            return (
             <div key={agent.id}>
               <div className="bg-surface border border-border rounded-lg p-4">
                 <div className="flex items-center gap-3 mb-2">
@@ -171,6 +170,13 @@ export function RunningAgentsView() {
                     </div>
                     <div className="text-[11px] text-muted font-mono">{agent.url}</div>
                     {agent.description && <div className="text-xs text-muted mt-0.5">{agent.description}</div>}
+                    {(environmentNode || topologyNode?.badges?.length) && (
+                      <div className="text-[11px] text-muted mt-0.5">
+                        {environmentNode ? `Runs on ${environmentNode.label}` : ''}
+                        {environmentNode && topologyNode?.badges?.length ? ' · ' : ''}
+                        {topologyNode?.badges?.join(' · ')}
+                      </div>
+                    )}
                   </div>
                   {agentTools[agent.id] && (
                     <span className="text-xs text-green">{agentTools[agent.id].length} tools</span>
@@ -223,7 +229,8 @@ export function RunningAgentsView() {
                 </div>
               )}
             </div>
-          ))}
+          );
+          })}
         </div>
       )}
 

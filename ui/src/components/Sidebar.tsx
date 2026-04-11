@@ -1,15 +1,18 @@
 import { useDroppable } from '@dnd-kit/core';
-import type { AssetType, Provider } from '../types';
+import type { AssetHealthStatus, AssetType, Provider } from '../types';
 import { TYPE_LABELS, PROVIDER_LABELS } from '../types';
 
 interface SidebarProps {
   categories: Record<string, number>;
+  healthCounts: Record<AssetHealthStatus, number>;
   activeType: AssetType | null;
   activeProvider: Provider | null;
   activeCategory: string | null;
+  activeHealth: AssetHealthStatus | null;
   onTypeChange: (type: AssetType | null) => void;
   onProviderChange: (provider: Provider | null) => void;
   onCategoryChange: (category: string | null) => void;
+  onHealthChange: (health: AssetHealthStatus | null) => void;
 }
 
 const allTypes: AssetType[] = ['skill', 'agent', 'mcp', 'rule', 'instruction'];
@@ -48,12 +51,13 @@ function DroppableProviderButton({
   );
 }
 
-function FilterSection({ title, items, selected, onToggle, labels }: {
+function FilterSection({ title, items, selected, onToggle, labels, counts }: {
   title: string;
   items: string[];
   selected: string | null;
   onToggle: (v: string) => void;
   labels?: Record<string, string>;
+  counts?: Record<string, number>;
 }) {
   return (
     <div className="mb-4">
@@ -63,13 +67,16 @@ function FilterSection({ title, items, selected, onToggle, labels }: {
           <button
             key={item}
             onClick={() => onToggle(item)}
-            className={`rounded-md px-2.5 py-1.5 text-left text-xs font-medium capitalize transition-colors ${
+            className={`flex items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left text-xs font-medium capitalize transition-colors ${
               selected === item
                 ? 'bg-accent/10 text-accent'
                 : 'text-accent-fg hover:bg-[hsl(240,4%,13%)]'
             }`}
           >
-            {labels?.[item] || item}
+            <span>{labels?.[item] || item}</span>
+            {counts && (
+              <span className="text-[11px] text-muted tabular-nums">{counts[item] || 0}</span>
+            )}
           </button>
         ))}
       </div>
@@ -79,12 +86,15 @@ function FilterSection({ title, items, selected, onToggle, labels }: {
 
 export function Sidebar({
   categories,
+  healthCounts,
   activeType,
   activeProvider,
   activeCategory,
+  activeHealth,
   onTypeChange,
   onProviderChange,
   onCategoryChange,
+  onHealthChange,
 }: SidebarProps) {
   return (
     <aside className="w-52 shrink-0 overflow-y-auto border-r border-border p-4">
@@ -109,6 +119,13 @@ export function Sidebar({
           ))}
         </div>
       </div>
+      <FilterSection
+        title="Health"
+        items={['broken', 'warning']}
+        selected={activeHealth}
+        onToggle={(v) => onHealthChange(activeHealth === v ? null : v as AssetHealthStatus)}
+        counts={healthCounts}
+      />
       <FilterSection
         title="Category"
         items={Object.entries(categories).sort(([, a], [, b]) => b - a).map(([cat]) => cat)}

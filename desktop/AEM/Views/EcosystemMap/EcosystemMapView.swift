@@ -4,6 +4,8 @@ struct EcosystemMapView: View {
     @Environment(EcosystemStore.self) private var store
     @Environment(APIClient.self) private var api
     @State private var showFilters = true
+    @State private var isBatchRunning = false
+    @State private var showBatchDeleteConfirmation = false
 
     var body: some View {
         @Bindable var store = store
@@ -14,7 +16,7 @@ struct EcosystemMapView: View {
 
             // Stats bar
             if let stats = store.stats {
-                StatsBarView(stats: stats)
+                StatsBarView(stats: stats, healthCounts: store.healthCounts)
             }
 
             // Content: optional filter sidebar + cards
@@ -43,7 +45,12 @@ struct EcosystemMapView: View {
                                 CategorySectionView(
                                     category: category,
                                     assets: assets,
-                                    usedByMap: store.usedByMap
+                                    usedByMap: store.usedByMap,
+                                    selectionMode: store.mapSelectionMode,
+                                    selectedAssetIDs: store.selectedAssetIDs,
+                                    onToggleSelection: { asset in
+                                        store.toggleAssetSelection(asset)
+                                    }
                                 )
                             }
                         }
@@ -60,6 +67,14 @@ struct EcosystemMapView: View {
                 AssetDetailView(asset: asset)
                     .inspectorColumnWidth(min: 280, ideal: 340, max: 450)
             }
+        }
+        .alert("Delete Selected Assets?", isPresented: $showBatchDeleteConfirmation) {
+            Button("Delete", role: .destructive) {
+                Task { await runBatchDelete() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will delete \(store.selectedAssets.count) selected assets and cannot be undone.")
         }
     }
 
@@ -99,10 +114,76 @@ struct EcosystemMapView: View {
 
             Spacer()
 
+            if store.mapSelectionMode {
+                                    Text("\(store.selectedAssets.count) selected")
+                                        .font(.caption.weight(.medium))
+                                        .foregroundStyle(Color.accentColor)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 5)
+                                        .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+
+                Button("Select Visible") {
+                    store.selectVisibleAssets()
+                }
+                .controlSize(.small)
+                .disabled(isBatchRunning || store.filteredAssets.isEmpty)
+
+                Button("Clear") {
+                    store.clearAssetSelection()
+                }
+                .controlSize(.small)
+                .disabled(isBatchRunning || store.selectedAssets.isEmpty)
+
+                Picker("Provider", selection: Binding(
+                    get: { store.batchTool },
+                    set: { store.batchTool = $0 }
+                )) {
+                    ForEach(Provider.allCases) { provider in
+                        Text(provider.label).tag(provider)
+                    }
+                }
+                .pickerStyle(.menu)
+                .controlSize(.small)
+                .frame(width: 150)
+                .disabled(isBatchRunning)
+
+                Button("Validate Selected") {
+                    Task { await runBatchValidate() }
+                }
+                .controlSize(.small)
+                .disabled(isBatchRunning || store.selectedAssets.isEmpty)
+
+                Button("Connect Selected") {
+                    Task { await runBatchConnect(mode: .connect) }
+                }
+                .controlSize(.small)
+                .disabled(isBatchRunning || store.selectedAssets.isEmpty)
+
+                Button("Disconnect Selected") {
+                    Task { await runBatchConnect(mode: .disconnect) }
+                }
+                .controlSize(.small)
+                .disabled(isBatchRunning || store.selectedAssets.isEmpty)
+
+                Button("Delete Selected", role: .destructive) {
+                    showBatchDeleteConfirmation = true
+                }
+                .controlSize(.small)
+                .disabled(isBatchRunning || store.selectedAssets.isEmpty)
+            }
+
             Button {
                 Task { await store.rescan(api: api) }
             } label: {
                 Label("Rescan", systemImage: "arrow.clockwise")
+                    .font(.caption)
+            }
+            .controlSize(.small)
+
+            Button {
+                store.setMapSelectionMode(!store.mapSelectionMode)
+            } label: {
+                Label(store.mapSelectionMode ? "Done" : "Select", systemImage: store.mapSelectionMode ? "checkmark.circle" : "checkmark.circle.badge.plus")
                     .font(.caption)
             }
             .controlSize(.small)
@@ -120,12 +201,101 @@ struct EcosystemMapView: View {
         .padding(.vertical, 8)
         .background(.bar)
     }
+
+    @MainActor
+    private func batchItems() -> [BatchActionItem] {
+        store.selectedAssets.map { asset in
+            BatchActionItem(
+                assetId: asset.id,
+                name: asset.name,
+                type: asset.type.rawValue,
+                filePath: asset.filePath,
+                providers: asset.providers,
+                projectPath: nil,
+                scope: "local"
+            )
+        }
+    }
+
+    private enum BatchConnectMode {
+        case connect
+        case disconnect
+    }
+
+    private func runBatchValidate() async {
+        let items = await MainActor.run { batchItems() }
+        guard !items.isEmpty else { return }
+        isBatchRunning = true
+        defer { isBatchRunning = false }
+
+        do {
+            let result = try await api.validateBatch(items)
+            await MainActor.run {
+                store.showToast("Validated \(result.total): \(result.okCount ?? 0) ok, \(result.warningCount ?? 0) warnings, \(result.brokenCount ?? 0) broken")
+            }
+            await store.loadAll(api: api)
+        } catch {
+            await MainActor.run {
+                store.showToast("Batch validation failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func runBatchConnect(mode: BatchConnectMode) async {
+        let items = await MainActor.run { batchItems() }
+        let tool = await MainActor.run { store.batchTool.rawValue }
+        guard !items.isEmpty else { return }
+        isBatchRunning = true
+        defer { isBatchRunning = false }
+
+        do {
+            let result: BatchActionResult
+            switch mode {
+            case .connect:
+                result = try await api.connectBatch(items, tool: tool)
+            case .disconnect:
+                result = try await api.disconnectBatch(items, tool: tool)
+            }
+            await MainActor.run {
+                let verb = mode == .connect ? "Connected" : "Disconnected"
+                store.showToast("\(verb) \(result.successCount ?? 0)/\(result.total) for \(store.batchTool.label)")
+            }
+            await store.loadAll(api: api)
+        } catch {
+            await MainActor.run {
+                store.showToast("Batch action failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func runBatchDelete() async {
+        let items = await MainActor.run { batchItems() }
+        guard !items.isEmpty else { return }
+        isBatchRunning = true
+        defer { isBatchRunning = false }
+
+        do {
+            let result = try await api.deleteBatch(items)
+            await MainActor.run {
+                let failedIds = Set(result.results.filter { !$0.ok }.map(\.id))
+                store.selectedAssetIDs = failedIds
+                store.mapSelectionMode = !failedIds.isEmpty
+                store.showToast("Deleted \(result.successCount ?? 0)/\(result.total) selected assets")
+            }
+            await store.loadAll(api: api)
+        } catch {
+            await MainActor.run {
+                store.showToast("Batch delete failed: \(error.localizedDescription)")
+            }
+        }
+    }
 }
 
 // MARK: - Stats Bar
 
 struct StatsBarView: View {
     let stats: Stats
+    let healthCounts: [AssetHealthFilter: Int]
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -137,6 +307,8 @@ struct StatsBarView: View {
                 statPill("MCP", count: stats.mcp ?? 0, icon: "server.rack")
                 statPill("Rules", count: stats.rule ?? 0, icon: "checklist")
                 statPill("Instr", count: stats.instruction ?? 0, icon: "doc.text.fill")
+                statPill("Broken", count: healthCounts[.broken] ?? 0, icon: "exclamationmark.octagon.fill")
+                statPill("Warnings", count: healthCounts[.warning] ?? 0, icon: "exclamationmark.triangle.fill")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 4)

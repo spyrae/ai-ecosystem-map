@@ -13,12 +13,20 @@ try {
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const { evaluateAssetHealth } = require('../health');
 
 const HOME = process.env.HOME || process.env.USERPROFILE || '';
-const DB_DIR = path.join(HOME, '.ai-ecosystem-map');
-const DB_PATH = path.join(DB_DIR, 'state.db');
 
 let db = null;
+const SNAPSHOT_RETENTION_COUNT = 200;
+const SNAPSHOT_RETENTION_SECONDS = 30 * 24 * 60 * 60;
+
+function resolveDbPaths() {
+  const testDbPath = process.env._AEM_TEST_DB || '';
+  const dbDir = testDbPath ? path.dirname(testDbPath) : path.join(HOME, '.ai-ecosystem-map');
+  const dbPath = testDbPath || path.join(dbDir, 'state.db');
+  return { dbDir, dbPath };
+}
 
 /**
  * Initialize SQLite database. Creates tables on first run.
@@ -33,11 +41,21 @@ function initStore() {
     return db;
   }
 
-  if (!fs.existsSync(DB_DIR)) {
-    fs.mkdirSync(DB_DIR, { recursive: true });
+  const { dbDir, dbPath } = resolveDbPaths();
+
+  if (!fs.existsSync(dbDir)) {
+    fs.mkdirSync(dbDir, { recursive: true });
   }
 
-  db = new Database(DB_PATH);
+  try {
+    db = new Database(dbPath);
+  } catch (err) {
+    console.error(`  Warning: SQLite store unavailable (${err.message})`);
+    console.error(`  Falling back to in-memory mode (data will not persist).\n`);
+    _fallbackStore = createInMemoryFallback();
+    db = _fallbackStore;
+    return db;
+  }
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
 
@@ -104,6 +122,16 @@ function initStore() {
       reverted INTEGER DEFAULT 0
     );
 
+    CREATE TABLE IF NOT EXISTS snapshots (
+      id TEXT PRIMARY KEY,
+      action TEXT NOT NULL,
+      label TEXT,
+      entries TEXT NOT NULL,
+      metadata TEXT,
+      created_at INTEGER DEFAULT (unixepoch()),
+      rolled_back_at INTEGER
+    );
+
     CREATE TABLE IF NOT EXISTS running_agents (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -119,6 +147,7 @@ function initStore() {
     CREATE INDEX IF NOT EXISTS idx_assets_env ON assets(environment_id);
     CREATE INDEX IF NOT EXISTS idx_connections_asset ON connections(asset_id);
     CREATE INDEX IF NOT EXISTS idx_history_asset ON history(asset_id);
+    CREATE INDEX IF NOT EXISTS idx_snapshots_created_at ON snapshots(created_at DESC);
   `);
 
   // Ensure local environment exists
@@ -147,6 +176,7 @@ function createInMemoryFallback() {
     environments: [{ id: 'local-fallback', name: require('os').hostname(), type: 'local' }],
     projects: [],
     history: [],
+    snapshots: [],
     runningAgents: [],
   };
   return mem;
@@ -190,8 +220,8 @@ function upsertAssets(categorizedData, environmentId) {
 
   const d = getDb();
   const upsert = d.prepare(`
-    INSERT INTO assets (id, name, type, description, file_path, environment_id, category, is_orchestrator, tags, providers, keywords, deps, hash, discovered_at, updated_at)
-    VALUES (@id, @name, @type, @description, @file_path, @environment_id, @category, @is_orchestrator, @tags, @providers, @keywords, @deps, @hash, unixepoch(), unixepoch())
+    INSERT INTO assets (id, name, type, description, file_path, environment_id, category, is_orchestrator, tags, providers, keywords, deps, raw_config, hash, discovered_at, updated_at)
+    VALUES (@id, @name, @type, @description, @file_path, @environment_id, @category, @is_orchestrator, @tags, @providers, @keywords, @deps, @raw_config, @hash, unixepoch(), unixepoch())
     ON CONFLICT(name, type, environment_id) DO UPDATE SET
       description = @description,
       file_path = @file_path,
@@ -201,6 +231,7 @@ function upsertAssets(categorizedData, environmentId) {
       providers = @providers,
       keywords = @keywords,
       deps = @deps,
+      raw_config = @raw_config,
       hash = @hash,
       updated_at = unixepoch()
     WHERE hash != @hash
@@ -227,6 +258,7 @@ function upsertAssets(categorizedData, environmentId) {
         providers: JSON.stringify(item.providers || []),
         keywords: item.keywords || '',
         deps: JSON.stringify(item.deps || []),
+        raw_config: item.rawConfig ? JSON.stringify(item.rawConfig) : null,
         hash,
       });
     }
@@ -295,7 +327,7 @@ function getAssetByName(name, type) {
 }
 
 function deserializeAsset(row) {
-  return {
+  const asset = {
     ...row,
     tags: JSON.parse(row.tags || '[]'),
     providers: JSON.parse(row.providers || '[]'),
@@ -304,6 +336,13 @@ function deserializeAsset(row) {
     desc: row.description,
     cat: row.category,
     filePath: row.file_path,
+    rawConfig: row.raw_config ? JSON.parse(row.raw_config) : null,
+  };
+  return {
+    ...asset,
+    health: evaluateAssetHealth(asset, {
+      isLocalEnvironment: !asset.environment_id || asset.environment_id === getLocalEnvironmentId(),
+    }),
   };
 }
 
@@ -381,23 +420,80 @@ function addEnvironment(env) {
 
 // ─── Projects ─────────────────────────────────────────
 
-function getProjects() {
-  if (isFallback()) return _fallbackStore.projects;
-  return getDb().prepare('SELECT * FROM projects ORDER BY name').all();
+function enrichFallbackProject(project) {
+  const env = _fallbackStore.environments.find((entry) => entry.id === project.environment_id);
+  return {
+    ...project,
+    environment_name: env?.name || null,
+    environment_type: env?.type || null,
+  };
 }
 
-function addProject(name, projectPath) {
+function getProjects(filters = {}) {
   if (isFallback()) {
+    let projects = _fallbackStore.projects;
+    if (filters.environment_id) {
+      projects = projects.filter((project) => project.environment_id === filters.environment_id);
+    }
+    return projects.map(enrichFallbackProject);
+  }
+
+  let sql = `
+    SELECT p.*, e.name AS environment_name, e.type AS environment_type
+    FROM projects p
+    LEFT JOIN environments e ON e.id = p.environment_id
+    WHERE 1=1
+  `;
+  const params = {};
+  if (filters.environment_id) {
+    sql += ' AND p.environment_id = @environment_id';
+    params.environment_id = filters.environment_id;
+  }
+  sql += ' ORDER BY CASE WHEN e.type = \'local\' THEN 0 ELSE 1 END, e.name, p.name';
+  return getDb().prepare(sql).all(params);
+}
+
+function getProjectById(projectId) {
+  if (!projectId) return null;
+
+  if (isFallback()) {
+    const project = _fallbackStore.projects.find((entry) => entry.id === projectId);
+    return project ? enrichFallbackProject(project) : null;
+  }
+
+  return getDb().prepare(`
+    SELECT p.*, e.name AS environment_name, e.type AS environment_type
+    FROM projects p
+    LEFT JOIN environments e ON e.id = p.environment_id
+    WHERE p.id = ?
+  `).get(projectId) || null;
+}
+
+function addProject(name, projectPath, environmentId) {
+  const envId = environmentId || getLocalEnvironmentId();
+
+  if (isFallback()) {
+    const existing = _fallbackStore.projects.find((entry) => entry.path === projectPath && entry.environment_id === envId);
+    if (existing) return existing.id;
+
     const id = genId();
-    _fallbackStore.projects.push({ id, name, path: projectPath, environment_id: 'local-fallback' });
+    _fallbackStore.projects.push({ id, name, path: projectPath, environment_id: envId });
     return id;
   }
+
   const d = getDb();
+  const existing = d.prepare('SELECT id FROM projects WHERE path = ? AND environment_id = ?').get(projectPath, envId);
+  if (existing?.id) return existing.id;
+
+  const byPath = d.prepare('SELECT id, environment_id FROM projects WHERE path = ?').get(projectPath);
+  if (byPath?.id) {
+    if (byPath.environment_id === envId) return byPath.id;
+    d.prepare('UPDATE projects SET name = ?, environment_id = ? WHERE id = ?').run(name, envId, byPath.id);
+    return byPath.id;
+  }
+
   const id = genId();
-  const envId = getLocalEnvironmentId();
-  d.prepare('INSERT OR IGNORE INTO projects (id, name, path, environment_id) VALUES (?, ?, ?, ?)').run(
-    id, name, projectPath, envId
-  );
+  d.prepare('INSERT INTO projects (id, name, path, environment_id) VALUES (?, ?, ?, ?)').run(id, name, projectPath, envId);
   return id;
 }
 
@@ -405,28 +501,157 @@ function addProject(name, projectPath) {
 
 function recordAction(action, assetName, details) {
   if (isFallback()) {
-    _fallbackStore.history.push({ action, asset_name: assetName, details: JSON.stringify(details), created_at: Date.now() });
-    return;
+    const id = _fallbackStore.history.length + 1;
+    _fallbackStore.history.push({
+      id,
+      action,
+      asset_name: assetName,
+      details: JSON.stringify(details || {}),
+      created_at: Date.now(),
+      reverted: 0,
+    });
+    return id;
   }
   const d = getDb();
-  d.prepare('INSERT INTO history (action, asset_name, details) VALUES (?, ?, ?)').run(
-    action, assetName, JSON.stringify(details)
+  const info = d.prepare('INSERT INTO history (action, asset_name, details) VALUES (?, ?, ?)').run(
+    action, assetName, JSON.stringify(details || {})
   );
+  return Number(info.lastInsertRowid);
+}
+
+function parseHistoryDetails(raw) {
+  try {
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function pruneSnapshots() {
+  if (isFallback()) {
+    const cutoff = Date.now() - SNAPSHOT_RETENTION_SECONDS * 1000;
+    _fallbackStore.snapshots = _fallbackStore.snapshots
+      .filter((snapshot) => snapshot.created_at >= cutoff)
+      .slice(-SNAPSHOT_RETENTION_COUNT);
+    return;
+  }
+
+  const d = getDb();
+  d.prepare('DELETE FROM snapshots WHERE created_at < unixepoch() - ?').run(SNAPSHOT_RETENTION_SECONDS);
+  const overflow = d.prepare('SELECT id FROM snapshots ORDER BY created_at DESC LIMIT -1 OFFSET ?').all(SNAPSHOT_RETENTION_COUNT);
+  for (const row of overflow) {
+    d.prepare('DELETE FROM snapshots WHERE id = ?').run(row.id);
+  }
+}
+
+function saveSnapshot(snapshot) {
+  const payload = {
+    id: snapshot.id || genId(),
+    action: snapshot.action,
+    label: snapshot.label || snapshot.action,
+    entries: JSON.stringify(snapshot.entries || []),
+    metadata: snapshot.metadata ? JSON.stringify(snapshot.metadata) : null,
+  };
+
+  if (isFallback()) {
+    _fallbackStore.snapshots.push({
+      ...payload,
+      created_at: Date.now(),
+      rolled_back_at: null,
+    });
+    pruneSnapshots();
+    return payload.id;
+  }
+
+  getDb().prepare('INSERT INTO snapshots (id, action, label, entries, metadata) VALUES (?, ?, ?, ?, ?)').run(
+    payload.id,
+    payload.action,
+    payload.label,
+    payload.entries,
+    payload.metadata
+  );
+  pruneSnapshots();
+  return payload.id;
+}
+
+function getSnapshot(snapshotId) {
+  if (!snapshotId) return null;
+
+  const row = isFallback()
+    ? _fallbackStore.snapshots.find((snapshot) => snapshot.id === snapshotId)
+    : getDb().prepare('SELECT * FROM snapshots WHERE id = ?').get(snapshotId);
+
+  if (!row) return null;
+  return {
+    ...row,
+    entries: JSON.parse(row.entries || '[]'),
+    metadata: row.metadata ? JSON.parse(row.metadata) : null,
+  };
+}
+
+function markSnapshotRolledBack(snapshotId) {
+  if (!snapshotId) return;
+
+  if (isFallback()) {
+    const row = _fallbackStore.snapshots.find((snapshot) => snapshot.id === snapshotId);
+    if (row) row.rolled_back_at = Date.now();
+    return;
+  }
+
+  getDb().prepare('UPDATE snapshots SET rolled_back_at = unixepoch() WHERE id = ?').run(snapshotId);
+}
+
+function getHistoryEntry(id) {
+  if (!id) return null;
+  const row = isFallback()
+    ? _fallbackStore.history.find((entry) => entry.id === id)
+    : getDb().prepare('SELECT * FROM history WHERE id = ?').get(id);
+
+  if (!row) return null;
+
+  const detailsJson = parseHistoryDetails(row.details);
+  const snapshot = detailsJson.snapshotId ? getSnapshot(detailsJson.snapshotId) : null;
+  return {
+    ...row,
+    details_json: detailsJson,
+    snapshot_id: detailsJson.snapshotId || null,
+    can_rollback: Boolean(detailsJson.snapshotId && row.reverted === 0 && !snapshot?.rolled_back_at),
+    rolled_back_at: snapshot?.rolled_back_at || null,
+  };
+}
+
+function markHistoryReverted(id) {
+  if (!id) return;
+  if (isFallback()) {
+    const row = _fallbackStore.history.find((entry) => entry.id === id);
+    if (row) row.reverted = 1;
+    return;
+  }
+  getDb().prepare('UPDATE history SET reverted = 1 WHERE id = ?').run(id);
 }
 
 function getHistory(limit = 50) {
-  if (isFallback()) return _fallbackStore.history.slice(-limit).reverse();
-  return getDb().prepare('SELECT * FROM history ORDER BY created_at DESC LIMIT ?').all(limit);
+  const rows = isFallback()
+    ? _fallbackStore.history.slice(-limit).reverse()
+    : getDb().prepare('SELECT * FROM history ORDER BY created_at DESC LIMIT ?').all(limit);
+
+  return rows.map((row) => {
+    const detailsJson = parseHistoryDetails(row.details);
+    const snapshot = detailsJson.snapshotId ? getSnapshot(detailsJson.snapshotId) : null;
+    return {
+      ...row,
+      details_json: detailsJson,
+      snapshot_id: detailsJson.snapshotId || null,
+      can_rollback: Boolean(detailsJson.snapshotId && row.reverted === 0 && !snapshot?.rolled_back_at),
+      rolled_back_at: snapshot?.rolled_back_at || null,
+    };
+  });
 }
 
 function undoLast() {
-  if (isFallback()) return { ok: false, error: 'Undo not available in fallback mode' };
-  const d = getDb();
-  const last = d.prepare('SELECT * FROM history WHERE reverted = 0 ORDER BY created_at DESC LIMIT 1').get();
+  const last = getHistory(100).find((entry) => entry.can_rollback);
   if (!last) return { ok: false, error: 'Nothing to undo' };
-
-  d.prepare('UPDATE history SET reverted = 1 WHERE id = ?').run(last.id);
-  return { ok: true, action: last.action, asset: last.asset_name, details: JSON.parse(last.details || '{}') };
+  return { ok: true, history: last };
 }
 
 // ─── Running Agents ──────────────────────────────────
@@ -479,13 +704,21 @@ module.exports = {
   getEnvironments,
   addEnvironment,
   getProjects,
+  getProjectById,
   addProject,
   recordAction,
+  saveSnapshot,
+  getSnapshot,
+  markSnapshotRolledBack,
   getHistory,
+  getHistoryEntry,
+  markHistoryReverted,
   undoLast,
   getRunningAgents,
   addRunningAgent,
   removeRunningAgent,
   close,
-  DB_PATH,
+  get DB_PATH() {
+    return resolveDbPaths().dbPath;
+  },
 };
