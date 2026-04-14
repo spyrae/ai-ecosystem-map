@@ -1,9 +1,7 @@
 import { useDraggable } from '@dnd-kit/core';
 import type { Asset } from '../types';
-import { assetCanConnect, capabilitySummaryItems } from '../types';
-import { ProviderBadge } from './ProviderBadge';
+import { assetCanConnect } from '../types';
 
-// Solid colors for type badges — no opacity tricks
 const TYPE_INLINE: Record<string, { bg: string; text: string; border: string }> = {
   skill:       { bg: '#0d3320', text: '#34d399', border: '#155e3b' },
   agent:       { bg: '#2a1754', text: '#a78bfa', border: '#3b1f7a' },
@@ -12,10 +10,28 @@ const TYPE_INLINE: Record<string, { bg: string; text: string; border: string }> 
   rule:        { bg: '#0d3330', text: '#2dd4bf', border: '#155e55' },
 };
 
-const HEALTH_INLINE: Record<string, { bg: string; text: string; border: string; label: string }> = {
-  warning: { bg: '#3b2a08', text: '#fbbf24', border: '#6b4f0a', label: 'warning' },
-  broken: { bg: '#3b0d12', text: '#f87171', border: '#7f1d1d', label: 'broken' },
+const PROVIDER_COLORS: Record<string, string> = {
+  claude: '#fbbf24',
+  codex: '#34d399',
+  gemini: '#38bdf8',
+  cursor: '#a78bfa',
+  windsurf: '#60a5fa',
+  copilot: '#a1a1aa',
+  continue_dev: '#fb923c',
 };
+
+const PROVIDER_SHORT: Record<string, string> = {
+  claude: 'Claude', codex: 'Codex', gemini: 'Gemini', cursor: 'Cursor',
+  windsurf: 'Windsurf', copilot: 'Copilot', continue_dev: 'Continue',
+};
+
+function ProviderText({ provider }: { provider: string }) {
+  return (
+    <span className="text-[10px] font-medium" style={{ color: PROVIDER_COLORS[provider] || '#a1a1aa' }}>
+      {PROVIDER_SHORT[provider] || provider}
+    </span>
+  );
+}
 
 interface AssetCardProps {
   asset: Asset;
@@ -31,9 +47,7 @@ interface AssetCardProps {
 
 export function AssetCard({
   asset,
-  usedBy = [],
   onConnect,
-  onNavigate,
   onClick,
   highlight,
   selectionMode = false,
@@ -41,7 +55,7 @@ export function AssetCard({
   onToggleSelection,
 }: AssetCardProps) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
-    id: `asset-${asset.type}-${asset.name}`,
+    id: `asset-${asset.id}`,
     data: { asset },
     disabled: selectionMode,
   });
@@ -50,7 +64,6 @@ export function AssetCard({
     ? TYPE_INLINE.agent
     : TYPE_INLINE[asset.type] || TYPE_INLINE.skill;
   const badgeLabel = asset.isOrchestrator ? 'orchestrator' : asset.type;
-  const capabilityItems = capabilitySummaryItems(asset.capabilities).slice(0, 3);
 
   return (
     <div
@@ -62,7 +75,7 @@ export function AssetCard({
         if (selectionMode) onToggleSelection?.(asset);
         else onClick?.(asset);
       }}
-      className={`card-glow group relative cursor-pointer rounded-xl border border-[hsl(240,5%,16%)] p-5 transition-all ${
+      className={`card-glow group relative flex h-[200px] cursor-pointer flex-col rounded-xl border border-[hsl(240,5%,16%)] p-4 transition-all ${
         asset.isOrchestrator ? 'border-l-2 border-l-[hsl(263,70%,58%)]' : ''
       } ${highlight ? 'shadow-[0_0_0_1px_rgba(59,130,246,0.3)]' : ''} ${isDragging ? 'opacity-30' : ''} ${
         selected ? 'ring-2 ring-accent/70 border-accent/60' : ''
@@ -76,14 +89,9 @@ export function AssetCard({
     >
       {selectionMode && (
         <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggleSelection?.(asset);
-          }}
+          onClick={(e) => { e.stopPropagation(); onToggleSelection?.(asset); }}
           className={`absolute left-3 top-3 flex h-7 w-7 items-center justify-center rounded-full border transition-colors ${
-            selected
-              ? 'border-accent bg-accent/15 text-accent'
-              : 'border-border bg-transparent text-muted hover:border-accent/50 hover:text-text'
+            selected ? 'border-accent bg-accent/15 text-accent' : 'border-border bg-transparent text-muted hover:border-accent/50 hover:text-text'
           }`}
           aria-label={selected ? `Deselect ${asset.name}` : `Select ${asset.name}`}
         >
@@ -104,113 +112,33 @@ export function AssetCard({
       )}
 
       {/* Header: name + type badge */}
-      <div className={`flex items-start justify-between ${selectionMode ? 'pl-10' : 'pr-8'}`}>
-        <span className="font-mono text-sm font-medium text-[hsl(217,91%,60%)]">/{asset.name}</span>
-        <div className="flex items-center gap-1.5">
-          {asset.health && asset.health.status !== 'ok' && (
-            <span
-              className="inline-flex rounded-full px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-wider"
-              style={{
-                backgroundColor: HEALTH_INLINE[asset.health.status].bg,
-                color: HEALTH_INLINE[asset.health.status].text,
-                borderWidth: '1px',
-                borderColor: HEALTH_INLINE[asset.health.status].border,
-              }}
-              title={asset.health.summary}
-            >
-              {HEALTH_INLINE[asset.health.status].label}
-            </span>
-          )}
-          <span
-            className="inline-flex rounded-full px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-wider"
-            style={{ backgroundColor: typeInline.bg, color: typeInline.text, borderWidth: '1px', borderColor: typeInline.border }}
-          >
-            {badgeLabel}
-          </span>
-        </div>
+      <div className={`flex items-start gap-2 ${selectionMode ? 'pl-10' : 'pr-8'}`}>
+        <span className="min-w-0 truncate font-mono text-sm font-medium text-[hsl(217,91%,60%)]">/{asset.name}</span>
+        <span
+          className="shrink-0 inline-flex rounded-full px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-wider"
+          style={{ backgroundColor: typeInline.bg, color: typeInline.text, borderWidth: '1px', borderColor: typeInline.border }}
+        >
+          {badgeLabel}
+        </span>
       </div>
 
-      {/* Description */}
+      {/* Description — fills available space */}
       {asset.desc && (
-        <p className="mt-2 line-clamp-2 text-[13px] leading-relaxed text-[hsl(240,5%,40%)]">{asset.desc}</p>
+        <p className="mt-2 flex-1 overflow-hidden text-[12px] leading-relaxed text-[hsl(240,5%,40%)]">
+          <span className="line-clamp-4">{asset.desc}</span>
+        </p>
       )}
+      {!asset.desc && <div className="flex-1" />}
 
-      {asset.health && asset.health.status !== 'ok' && (
-        <div className={`mt-3 rounded-lg border px-3 py-2 text-[11px] ${
-          asset.health.status === 'broken'
-            ? 'border-red/30 bg-red/10 text-red'
-            : 'border-amber-500/30 bg-amber-500/10 text-amber-300'
-        }`}>
-          {asset.health.summary}
-        </div>
-      )}
-
-      {capabilityItems.length > 0 && (
-        <div className="mt-3 rounded-lg border border-border bg-[hsl(240,4%,13%)] px-3 py-2">
-          <div className="text-[10px] font-semibold uppercase tracking-wider text-[hsl(240,5%,40%)]">Targets</div>
-          <div className="mt-1 flex flex-wrap gap-1.5 text-[11px] text-[hsl(240,5%,65%)]">
-            {capabilityItems.map((item) => (
-              <span key={item} className="rounded-full bg-[hsl(240,5%,16%)] px-2 py-0.5">
-                {item}
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Tags */}
-      {asset.tags.length > 0 && (
-        <div className="mt-3 flex flex-wrap gap-1.5">
-          {asset.tags.slice(0, 3).map((tag) => (
-            <span key={tag} className="rounded-full px-2.5 py-0.5 text-[10px] font-medium" style={{ backgroundColor: '#252530', color: '#b0b0be' }}>
-              {tag}
-            </span>
-          ))}
-        </div>
-      )}
-
-      {/* Deps — uses */}
-      {asset.deps.length > 0 && (
-        <div className="mt-3 border-t border-border pt-3">
-          <div className="text-[10px] font-semibold uppercase tracking-wider text-[hsl(240,5%,40%)] mb-1.5">Uses</div>
-          <div className="flex flex-wrap gap-1">
-            {asset.deps.map((dep) => (
-              <button
-                key={dep}
-                onClick={(e) => { e.stopPropagation(); onNavigate?.(dep); }}
-                className="text-[11px] text-violet font-mono hover:underline"
-              >
-                {dep}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Used by */}
-      {usedBy.length > 0 && (
-        <div className="mt-2 border-t border-border pt-2">
-          <div className="text-[10px] font-semibold uppercase tracking-wider text-pink mb-1.5">Used by</div>
-          <div className="flex flex-wrap gap-1">
-            {usedBy.map((name) => (
-              <button
-                key={name}
-                onClick={(e) => { e.stopPropagation(); onNavigate?.(name); }}
-                className="text-[11px] text-pink font-mono hover:underline"
-              >
-                {name}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Providers */}
+      {/* Connected to — providers at bottom */}
       {asset.providers.length > 0 && (
-        <div className="mt-3 flex gap-1.5">
-          {asset.providers.map((p) => (
-            <ProviderBadge key={p} provider={p} />
-          ))}
+        <div className="mt-auto pt-3">
+          <div className="text-[10px] font-medium text-muted mb-1">Connected to</div>
+          <div className="flex flex-wrap gap-x-2.5 gap-y-0.5">
+            {asset.providers.map((p) => (
+              <ProviderText key={p} provider={p} />
+            ))}
+          </div>
         </div>
       )}
     </div>

@@ -46,6 +46,10 @@ function summarizeProviders(providers) {
   });
 }
 
+function hasStructuralBlockingIssues(asset) {
+  return Boolean(asset?.health?.issues?.some((issue) => issue.level === 'blocking' && !String(issue.code || '').startsWith('runtime_')));
+}
+
 function buildCapabilities(asset, options = {}) {
   const locations = createLocations(asset);
   const projectRoot = options.projectRoot || asset.projectPath || null;
@@ -57,6 +61,7 @@ function buildCapabilities(asset, options = {}) {
     locations
   );
   const invalidSummary = asset.health?.summary || 'Blocking issues prevent this asset from being used safely.';
+  const hasStructuralBlocking = hasStructuralBlockingIssues(asset);
 
   const providers = ALL_TOOLS.map((tool) => {
     const connection = connections[tool] || {
@@ -71,11 +76,11 @@ function buildCapabilities(asset, options = {}) {
     let detail = 'Available as a target for this asset.';
 
     if (connection.isSource) {
-      state = asset.health?.hasBlocking ? 'invalid' : 'active';
-      detail = asset.health?.hasBlocking ? invalidSummary : 'This provider is the source/original location of the asset.';
+      state = hasStructuralBlocking ? 'invalid' : 'active';
+      detail = hasStructuralBlocking ? invalidSummary : 'This provider is the source/original location of the asset.';
     } else if (connection.connected) {
-      state = asset.health?.hasBlocking ? 'invalid' : 'configured';
-      detail = asset.health?.hasBlocking
+      state = hasStructuralBlocking ? 'invalid' : 'configured';
+      detail = hasStructuralBlocking
         ? invalidSummary
         : connection.isSymlink
           ? 'Connected via symlink.'
@@ -86,7 +91,7 @@ function buildCapabilities(asset, options = {}) {
     } else if (!installed) {
       state = 'missing';
       detail = `${PROVIDER_LABELS[tool] || tool} is not installed on this machine.`;
-    } else if (asset.health?.hasBlocking) {
+    } else if (hasStructuralBlocking) {
       state = 'invalid';
       detail = invalidSummary;
     }

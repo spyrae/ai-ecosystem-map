@@ -7,6 +7,9 @@ final class EcosystemStore: @unchecked Sendable {
     var assets: [Asset] = []
     var stats: Stats?
     var topology: TopologyGraph?
+    var dependencyGraph: DependencyGraph?
+    var driftGraph: DriftGraph?
+    var auditMode: AuditMode?
     var categories: [String: Int] = [:]
     var projects: [Project] = []
     var servers: [ServerEnvironment] = []
@@ -18,11 +21,16 @@ final class EcosystemStore: @unchecked Sendable {
     var providerFilter: Provider?
     var categoryFilter: String?
     var healthFilter: AssetHealthFilter?
+    var dependencyFilter: AssetDependencyFilter?
+    var driftFilter: AssetDriftStatus?
 
     // UI state
+    var selectedTab: NavigationTab = .map
     var isLoading = false
     var showCreate = false
     var selectedAsset: Asset?
+    var focusedProjectID: String?
+    var focusedServerID: String?
     var toast: String?
     var mapSelectionMode = false
     var selectedAssetIDs: Set<String> = []
@@ -48,6 +56,17 @@ final class EcosystemStore: @unchecked Sendable {
         }
         if let healthFilter = healthFilter {
             result = result.filter { $0.health?.status == healthFilter.rawValue }
+        }
+        if let dependencyFilter = dependencyFilter {
+            result = result.filter { asset in
+                switch dependencyFilter {
+                case .orphaned:
+                    return asset.dependency?.orphaned == true
+                }
+            }
+        }
+        if let driftFilter = driftFilter {
+            result = result.filter { $0.drift?.status == driftFilter }
         }
         if !searchText.isEmpty {
             let q = searchText.lowercased()
@@ -75,7 +94,8 @@ final class EcosystemStore: @unchecked Sendable {
             var map: [String: [String]] = [:]
             for edge in topology.edges where edge.kind == "depends_on" {
                 guard let source = nodeMap[edge.from], let target = nodeMap[edge.to] else { continue }
-                map[target.label, default: []].append(source.label)
+                guard let assetId = target.assetId else { continue }
+                map[assetId, default: []].append(source.label)
             }
             return map.mapValues { Array(Set($0)).sorted() }
         }
@@ -83,7 +103,9 @@ final class EcosystemStore: @unchecked Sendable {
         var map: [String: [String]] = [:]
         for asset in assets {
             for dep in asset.deps {
-                map[dep, default: []].append(asset.name)
+                if let depAsset = assets.first(where: { $0.name == dep }) {
+                    map[depAsset.id, default: []].append(asset.name)
+                }
             }
         }
         return map
@@ -101,12 +123,29 @@ final class EcosystemStore: @unchecked Sendable {
         return counts
     }
 
+    var driftCounts: [AssetDriftStatus: Int] {
+        var counts: [AssetDriftStatus: Int] = [.source: 0, .synced: 0, .drifted: 0, .orphaned: 0]
+        for asset in assets {
+            guard let status = asset.drift?.status else { continue }
+            counts[status, default: 0] += 1
+        }
+        return counts
+    }
+
+    var dependencyCounts: [AssetDependencyFilter: Int] {
+        [.orphaned: dependencyGraph?.summary.orphanedCount ?? 0]
+    }
+
     var selectedAssets: [Asset] {
         assets.filter { selectedAssetIDs.contains($0.id) }
     }
 
     var canUndoLastHistory: Bool {
-        historyEntries.contains { $0.can_rollback == true }
+        !globalReadOnly && historyEntries.contains { $0.can_rollback == true }
+    }
+
+    var globalReadOnly: Bool {
+        auditMode?.global_read_only == true
     }
 
     // MARK: - Actions
@@ -130,14 +169,23 @@ final class EcosystemStore: @unchecked Sendable {
             async let assetsTask = api.fetchAssets()
             async let statsTask = api.fetchStats()
             async let topologyTask = api.fetchTopology()
+            async let dependenciesTask = api.fetchDependencies()
+            async let driftTask = api.fetchDrift()
+            async let auditTask = api.fetchAuditMode()
             async let catsTask = api.fetchCategories()
             async let historyTask = api.fetchHistory()
-            let (a, s, t, c, h) = try await (assetsTask, statsTask, topologyTask, catsTask, historyTask)
-            assets = a
+            let (a, s, t, deps, d, audit, c, h) = try await (assetsTask, statsTask, topologyTask, dependenciesTask, driftTask, auditTask, catsTask, historyTask)
+            driftGraph = d
+            dependencyGraph = deps
+            auditMode = audit
+            assets = decorateAssets(a, driftByAssetId: d.byAssetId, dependencyByAssetId: deps.byAssetId)
             stats = s
             topology = t
             categories = c
             historyEntries = h
+            if let selectedAsset {
+                self.selectedAsset = assets.first(where: { $0.id == selectedAsset.id })
+            }
             print("[store] Loaded \(a.count) assets")
         } catch {
             print("[store] Failed to load: \(error)")
@@ -171,7 +219,7 @@ final class EcosystemStore: @unchecked Sendable {
         defer { historyBusyKey = nil }
 
         do {
-            try await api.undoLastAction()
+            try await api.undoLastAction(approval: .client("macos"))
             showToast("Last change rolled back")
             await loadAll(api: api)
         } catch {
@@ -187,7 +235,7 @@ final class EcosystemStore: @unchecked Sendable {
         defer { historyBusyKey = nil }
 
         do {
-            try await api.rollbackHistoryEntry(historyId)
+            try await api.rollbackHistoryEntry(historyId, approval: .client("macos"))
             showToast("Rolled back history entry #\(historyId)")
             await loadAll(api: api)
         } catch {
@@ -202,8 +250,14 @@ final class EcosystemStore: @unchecked Sendable {
         do {
             async let projectsTask = api.fetchProjects()
             async let topologyTask = api.fetchTopology()
+            async let dependenciesTask = api.fetchDependencies()
+            async let driftTask = api.fetchDrift()
+            async let auditTask = api.fetchAuditMode()
             projects = try await projectsTask
             topology = try await topologyTask
+            dependencyGraph = try await dependenciesTask
+            driftGraph = try await driftTask
+            auditMode = try await auditTask
         } catch {
             print("[store] Failed to load projects: \(error)")
         }
@@ -215,8 +269,14 @@ final class EcosystemStore: @unchecked Sendable {
         do {
             async let serversTask = api.fetchServers()
             async let topologyTask = api.fetchTopology()
+            async let dependenciesTask = api.fetchDependencies()
+            async let driftTask = api.fetchDrift()
+            async let auditTask = api.fetchAuditMode()
             servers = try await serversTask
             topology = try await topologyTask
+            dependencyGraph = try await dependenciesTask
+            driftGraph = try await driftTask
+            auditMode = try await auditTask
         } catch {
             print("[store] Failed to load servers: \(error)")
         }
@@ -228,8 +288,14 @@ final class EcosystemStore: @unchecked Sendable {
         do {
             async let agentsTask = api.fetchRunningAgents()
             async let topologyTask = api.fetchTopology()
+            async let dependenciesTask = api.fetchDependencies()
+            async let driftTask = api.fetchDrift()
+            async let auditTask = api.fetchAuditMode()
             runningAgents = try await agentsTask
             topology = try await topologyTask
+            dependencyGraph = try await dependenciesTask
+            driftGraph = try await driftTask
+            auditMode = try await auditTask
         } catch {
             print("[store] Failed to load running agents: \(error)")
         }
@@ -294,6 +360,39 @@ final class EcosystemStore: @unchecked Sendable {
         topologyNode(kind: environmentType == "remote" ? "remote_server" : "machine", value: environmentId)
     }
 
+    func auditPolicy(environmentId: String?) -> AuditEnvironmentPolicy? {
+        guard let environmentId else { return nil }
+        return auditMode?.environments.first(where: { $0.environment_id == environmentId })
+    }
+
+    func isEnvironmentReadOnly(_ environmentId: String?) -> Bool {
+        globalReadOnly || auditPolicy(environmentId: environmentId)?.read_only == true
+    }
+
+    func readOnlyReason(environmentId: String?, environmentName: String? = nil) -> String? {
+        if globalReadOnly {
+            return "Global read-only audit mode is enabled."
+        }
+        if let policy = auditPolicy(environmentId: environmentId), policy.read_only {
+            return "\(environmentName ?? policy.name) is in read-only audit mode."
+        }
+        return nil
+    }
+
+    func driftGroup(for assetId: String) -> DriftGroup? {
+        guard let groupKey = driftGraph?.byAssetId[assetId]?.groupKey else { return nil }
+        return driftGraph?.groups.first(where: { $0.key == groupKey })
+    }
+
+    func decorateProjectAssets(_ items: [ProjectAsset]) -> [ProjectAsset] {
+        let driftByAssetId = driftGraph?.byAssetId ?? [:]
+        return items.map { asset in
+            var decorated = asset
+            decorated.drift = driftByAssetId[asset.id]
+            return decorated
+        }
+    }
+
     func runningAgentTopologyNode(agentId: String) -> TopologyNode? {
         topologyNode(kind: "running_agent", value: agentId)
     }
@@ -320,8 +419,31 @@ final class EcosystemStore: @unchecked Sendable {
                 return AssetTopologyProviderLink(node: node, edge: edge)
             },
             dependsOn: outgoing.filter { $0.kind == "depends_on" }.compactMap { nodeMap[$0.to] },
-            dependedOnBy: incoming.filter { $0.kind == "depends_on" }.compactMap { nodeMap[$0.from] }
+            dependedOnBy: incoming.filter { $0.kind == "depends_on" }.compactMap { nodeMap[$0.from] },
+            runtimeConsumers: outgoing.filter { $0.kind == "loaded_by" }.compactMap { edge in
+                guard let node = nodeMap[edge.to] else { return nil }
+                return AssetTopologyProviderLink(node: node, edge: edge)
+            }
         )
+    }
+
+    func focusProject(_ projectId: String) {
+        selectedTab = .projects
+        focusedProjectID = projectId
+    }
+
+    func focusServer(_ serverId: String) {
+        selectedTab = .servers
+        focusedServerID = serverId
+    }
+
+    private func decorateAssets(_ items: [Asset], driftByAssetId: [String: AssetDriftInfo], dependencyByAssetId: [String: AssetDependencyInfo]) -> [Asset] {
+        items.map { asset in
+            var decorated = asset
+            decorated.drift = driftByAssetId[asset.id]
+            decorated.dependency = dependencyByAssetId[asset.id]
+            return decorated
+        }
     }
 }
 
@@ -336,12 +458,14 @@ struct AssetTopologySnapshot: Hashable {
     let providers: [AssetTopologyProviderLink]
     let dependsOn: [TopologyNode]
     let dependedOnBy: [TopologyNode]
+    let runtimeConsumers: [AssetTopologyProviderLink]
 
     static let empty = AssetTopologySnapshot(
         environments: [],
         projects: [],
         providers: [],
         dependsOn: [],
-        dependedOnBy: []
+        dependedOnBy: [],
+        runtimeConsumers: []
     )
 }

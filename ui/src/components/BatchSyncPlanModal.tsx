@@ -13,6 +13,8 @@ export function BatchSyncPlanModal({
   title,
   onApply,
   onClose,
+  readOnly = false,
+  readOnlyReason,
 }: {
   preview: BatchSyncPreview | null;
   applying: boolean;
@@ -20,6 +22,8 @@ export function BatchSyncPlanModal({
   title: string;
   onApply: () => void;
   onClose: () => void;
+  readOnly?: boolean;
+  readOnlyReason?: string;
 }) {
   if (loading || !preview) {
     return (
@@ -71,6 +75,12 @@ export function BatchSyncPlanModal({
             <SummaryPill label="Operations" value={preview.operationCount} tone="text-orange" />
           </div>
 
+          {readOnly && (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
+              {readOnlyReason || 'Read-only audit mode is enabled. Applying batch sync is disabled.'}
+            </div>
+          )}
+
           <div className="space-y-3">
             {preview.results.map((entry) => (
               <div key={entry.id} className="rounded-xl border border-border bg-bg/40">
@@ -92,6 +102,19 @@ export function BatchSyncPlanModal({
                   {!entry.ok && entry.error && (
                     <div className="rounded-lg border border-red/40 bg-red/10 px-3 py-2 text-sm text-red">
                       {entry.error}
+                    </div>
+                  )}
+
+                  {entry.plan?.target?.git && (
+                    <div className={`rounded-lg border px-3 py-2 text-sm ${
+                      entry.plan.target.git.conflictedCount > 0
+                        ? 'border-red/40 bg-red/10 text-red'
+                        : entry.plan.target.git.dirty
+                          ? 'border-orange/40 bg-orange/10 text-orange'
+                          : 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300'
+                    }`}>
+                      <div className="font-medium">Git Target</div>
+                      <div className="mt-0.5">{entry.plan.target.git.summary}</div>
                     </div>
                   )}
 
@@ -146,7 +169,7 @@ export function BatchSyncPlanModal({
             </button>
             <button
               onClick={onApply}
-              disabled={applying || !canApply}
+              disabled={readOnly || applying || !canApply}
               className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-bg transition-colors hover:bg-accent/90 disabled:opacity-40"
             >
               {applying ? 'Applying...' : 'Apply Batch Sync'}

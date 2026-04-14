@@ -5,6 +5,7 @@ import { createAsset, generateAsset } from '../lib/api';
 interface CreateAssetModalProps {
   onClose: () => void;
   onCreated: () => void;
+  readOnly?: boolean;
 }
 
 type Mode = 'manual' | 'ai';
@@ -138,7 +139,7 @@ function supportsGlobalScope(type: AssetType, provider: string) {
   return true;
 }
 
-export function CreateAssetModal({ onClose, onCreated }: CreateAssetModalProps) {
+export function CreateAssetModal({ onClose, onCreated, readOnly = false }: CreateAssetModalProps) {
   const [mode, setMode] = useState<Mode>('manual');
   const [type, setType] = useState<AssetType>('skill');
   const [name, setName] = useState('');
@@ -196,6 +197,10 @@ export function CreateAssetModal({ onClose, onCreated }: CreateAssetModalProps) 
   };
 
   const handleCreate = async () => {
+    if (readOnly) {
+      setError('Global read-only audit mode is enabled');
+      return;
+    }
     const finalName = type === 'instruction' ? instructionNameForProvider(provider) : name.trim();
     if (!finalName) { setError('Name is required'); return; }
     if ((type === 'skill' || type === 'agent' || type === 'rule') && !/^[a-z0-9][a-z0-9.-]*[a-z0-9]$|^[a-z0-9]$/.test(finalName)) {
@@ -324,6 +329,7 @@ export function CreateAssetModal({ onClose, onCreated }: CreateAssetModalProps) 
           )}
 
           {error && <div className="text-xs text-red">{error}</div>}
+          {readOnly && <div className="text-xs text-amber-300">Global read-only audit mode is enabled. Asset creation is disabled.</div>}
         </div>
 
         {/* Mode tabs: Manual / AI Generate */}
@@ -409,7 +415,7 @@ export function CreateAssetModal({ onClose, onCreated }: CreateAssetModalProps) 
           <button onClick={onClose} className="text-sm text-muted hover:text-text">Cancel</button>
           <button
             onClick={handleCreate}
-            disabled={creating || !name.trim() || (mode === 'ai' && !generated)}
+            disabled={readOnly || creating || !name.trim() || (mode === 'ai' && !generated)}
             className="px-4 py-2 text-sm font-medium bg-accent text-bg rounded-lg hover:bg-accent/90 transition-colors disabled:opacity-40"
           >
             {creating ? 'Creating...' : `Create ${type}`}

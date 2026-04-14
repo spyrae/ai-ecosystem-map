@@ -1,16 +1,19 @@
 import { useEffect, useState } from 'react';
 import {
   CAPABILITY_STATE_LABELS,
+  DRIFT_STATUS_LABELS,
   assetCanConnect,
   assetCanDelete,
   assetCanEdit,
   assetCanInspectMcpTools,
   capabilitySummaryItems,
   type Asset,
-  type McpTool,
+  type DriftGroup,
+  type McpRuntimeCheck,
+  type RemediationSuggestion,
   type TopologyGraph,
 } from '../types';
-import { fetchAssetContent, updateAssetContent, deleteAsset, fetchMcpConfig, listMcpTools } from '../lib/api';
+import { applyAssetRemediation, connectAsset, fetchAssetContent, fetchAssetRemediations, updateAssetContent, deleteAsset, fetchMcpConfig, runMcpRuntimeCheck } from '../lib/api';
 import { getAssetTopology } from '../lib/topology';
 import { ProviderBadge } from './ProviderBadge';
 
@@ -31,15 +34,45 @@ const CAPABILITY_STYLES: Record<string, string> = {
   invalid: 'border-red/30 bg-red/10 text-red',
 };
 
+const RUNTIME_STYLES: Record<string, string> = {
+  ok: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
+  warning: 'border-amber-500/30 bg-amber-500/10 text-amber-300',
+  broken: 'border-red/30 bg-red/10 text-red',
+  unknown: 'border-border bg-[hsl(240,4%,13%)] text-muted',
+};
+
 interface AssetDetailProps {
   asset: Asset;
   topology?: TopologyGraph | null;
+  driftGroup?: DriftGroup | null;
   onClose: () => void;
   onDeleted: () => void;
   onConnect: (asset: Asset) => void;
+  onUpdated?: () => void | Promise<void>;
+  onMakeSourceOfTruth?: (groupKey: string, assetId: string) => void | Promise<void>;
+  onOpenProject?: (projectId: string) => void;
+  onOpenServer?: (serverId: string) => void;
+  readOnly?: boolean;
 }
 
-export function AssetDetail({ asset, topology, onClose, onDeleted, onConnect }: AssetDetailProps) {
+export function AssetDetail({
+  asset,
+  topology,
+  driftGroup,
+  onClose,
+  onDeleted,
+  onConnect,
+  onUpdated,
+  onMakeSourceOfTruth,
+  onOpenProject,
+  onOpenServer,
+  readOnly = false,
+}: AssetDetailProps) {
+  const buildApproval = (note?: string | null) => ({
+    confirmed: true,
+    note: note ?? null,
+    source: 'web',
+  });
   const [content, setContent] = useState<string | null>(null);
   const [filePath, setFilePath] = useState('');
   const [loading, setLoading] = useState(true);
@@ -49,25 +82,29 @@ export function AssetDetail({ asset, topology, onClose, onDeleted, onConnect }: 
   const [toast, setToast] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [mcpConfig, setMcpConfig] = useState<Record<string, unknown> | null>(null);
-  const [mcpTools, setMcpTools] = useState<McpTool[]>([]);
-  const [loadingTools, setLoadingTools] = useState(false);
-  const [toolsError, setToolsError] = useState<string | null>(null);
-  const [toolsLoaded, setToolsLoaded] = useState(false);
+  const [mcpRuntime, setMcpRuntime] = useState<McpRuntimeCheck | null>(asset.runtime ?? null);
+  const [loadingRuntime, setLoadingRuntime] = useState(false);
+  const [connectingProvider, setConnectingProvider] = useState<string | null>(null);
+  const [runtimeError, setRuntimeError] = useState<string | null>(null);
+  const [remediations, setRemediations] = useState<RemediationSuggestion[]>([]);
+  const [loadingRemediations, setLoadingRemediations] = useState(false);
+  const [applyingRemediationId, setApplyingRemediationId] = useState<string | null>(null);
   const canEdit = assetCanEdit(asset);
   const canDelete = assetCanDelete(asset);
   const canConnect = assetCanConnect(asset);
   const canInspectTools = assetCanInspectMcpTools(asset);
+  const readOnlyMessage = 'Global read-only audit mode is enabled.';
   const capabilityItems = capabilitySummaryItems(asset.capabilities);
   const topologyInfo = getAssetTopology(topology, asset.id);
+  const dependency = asset.dependency;
 
   useEffect(() => {
     setLoading(true);
     setEditing(false);
     setConfirmDelete(false);
     setMcpConfig(null);
-    setMcpTools([]);
-    setToolsLoaded(false);
-    setToolsError(null);
+    setMcpRuntime(asset.runtime ?? null);
+    setRuntimeError(null);
 
     if (asset.type === 'mcp' && canEdit) {
       fetchMcpConfig(asset.id)
@@ -93,7 +130,15 @@ export function AssetDetail({ asset, topology, onClose, onDeleted, onConnect }: 
       setEditContent('');
       setLoading(false);
     }
-  }, [asset.id, asset.type, canEdit]);
+  }, [asset.id, asset.type, canEdit, asset.runtime]);
+
+  useEffect(() => {
+    setLoadingRemediations(true);
+    fetchAssetRemediations(asset.id, asset.type)
+      .then((res) => setRemediations(res.data || []))
+      .catch(() => setRemediations([]))
+      .finally(() => setLoadingRemediations(false));
+  }, [asset.id, asset.type, asset.health?.summary, asset.runtime?.checkedAt, asset.drift?.groupKey, asset.drift?.status]);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -118,15 +163,49 @@ export function AssetDetail({ asset, topology, onClose, onDeleted, onConnect }: 
     } catch { showToast('Delete failed'); }
   };
 
-  const handleListTools = async () => {
-    setLoadingTools(true);
-    setToolsError(null);
+  const handleRunRuntimeCheck = async () => {
+    setLoadingRuntime(true);
+    setRuntimeError(null);
     try {
-      const res = await listMcpTools(asset.id);
-      if (res.ok && res.tools) { setMcpTools(res.tools); setToolsLoaded(true); }
-      else setToolsError(res.error || 'Failed');
-    } catch (err) { setToolsError(err instanceof Error ? err.message : 'Error'); }
-    finally { setLoadingTools(false); }
+      const res = await runMcpRuntimeCheck(asset.id, { force: true });
+      if (!res.ok || !res.data) {
+        setRuntimeError('Runtime check failed');
+        return;
+      }
+      setMcpRuntime(res.data);
+      await onUpdated?.();
+    } catch (err) {
+      setRuntimeError(err instanceof Error ? err.message : 'Runtime check failed');
+    } finally {
+      setLoadingRuntime(false);
+    }
+  };
+
+  const handleApplyRemediation = async (suggestion: RemediationSuggestion) => {
+    if (!suggestion.canApply || readOnly) return;
+    if (suggestion.risky && !window.confirm(`${suggestion.title}\n\n${suggestion.summary}\n\nThis remediation will overwrite current content. Continue?`)) {
+      return;
+    }
+    setApplyingRemediationId(suggestion.id);
+    try {
+      const res = await applyAssetRemediation(asset.id, suggestion.id, {
+        type: asset.type,
+        confirmRisk: suggestion.risky,
+        approval: buildApproval(suggestion.risky ? `Approved risky remediation for ${asset.name}` : `Approved remediation for ${asset.name}`),
+      });
+      if (!res.ok) {
+        showToast(`Error: ${res.error || 'Remediation failed'}`);
+        return;
+      }
+      showToast('Remediation applied');
+      await onUpdated?.();
+      const latest = await fetchAssetRemediations(asset.id, asset.type);
+      setRemediations(latest.data || []);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Remediation failed');
+    } finally {
+      setApplyingRemediationId(null);
+    }
   };
 
   const typeStyle = TYPE_STYLES[asset.type] || TYPE_STYLES.skill;
@@ -166,13 +245,19 @@ export function AssetDetail({ asset, topology, onClose, onDeleted, onConnect }: 
             <p className="mt-2 font-mono text-xs text-muted">{filePath}</p>
           )}
 
+          {readOnly && (
+            <div className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+              {readOnlyMessage}
+            </div>
+          )}
+
           {/* Action buttons */}
           <div className="mt-4 flex gap-2">
             {!editing ? (
               <button
-                disabled={!canEdit}
+                disabled={readOnly || !canEdit}
                 onClick={() => setEditing(true)}
-                title={canEdit ? 'Edit asset content' : 'Editing is unavailable for this asset in its current state'}
+                title={readOnly ? readOnlyMessage : canEdit ? 'Edit asset content' : 'Editing is unavailable for this asset in its current state'}
                 className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-accent-fg hover:bg-[hsl(240,4%,13%)] transition-colors disabled:opacity-40 disabled:hover:bg-transparent"
               >
                 <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z" /></svg>
@@ -180,7 +265,7 @@ export function AssetDetail({ asset, topology, onClose, onDeleted, onConnect }: 
               </button>
             ) : (
               <>
-                <button onClick={handleSave} disabled={saving} className="flex items-center gap-1.5 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-400 hover:bg-emerald-500/15 transition-colors disabled:opacity-40">
+                <button onClick={handleSave} disabled={readOnly || saving} className="flex items-center gap-1.5 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-400 hover:bg-emerald-500/15 transition-colors disabled:opacity-40">
                   {saving ? 'Saving...' : 'Save'}
                 </button>
                 <button onClick={() => { setEditing(false); setEditContent(content || ''); }} className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-accent-fg hover:bg-[hsl(240,4%,13%)] transition-colors">
@@ -188,58 +273,32 @@ export function AssetDetail({ asset, topology, onClose, onDeleted, onConnect }: 
                 </button>
               </>
             )}
-            <button
-              disabled={!canConnect}
-              onClick={() => onConnect(asset)}
-              title={canConnect ? 'Manage provider connections' : 'Connections are unavailable until blocking asset issues are fixed'}
-              className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-accent-fg hover:bg-[hsl(240,4%,13%)] transition-colors disabled:opacity-40 disabled:hover:bg-transparent"
-            >
-              <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244" /></svg>
-              Connect
-            </button>
+            {/* Connect button moved to Capability Matrix inline */}
             {!confirmDelete ? (
               <button
-                disabled={!canDelete}
+                disabled={readOnly || !canDelete}
                 onClick={() => setConfirmDelete(true)}
-                title={canDelete ? 'Delete asset' : 'Delete is unavailable because the backing config or file is already missing'}
+                title={readOnly ? readOnlyMessage : canDelete ? 'Delete asset' : 'Delete is unavailable because the backing config or file is already missing'}
                 className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-accent-fg hover:bg-[hsl(240,4%,13%)] hover:text-red transition-colors disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-current"
               >
                 <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" /></svg>
                 Delete
               </button>
             ) : (
-              <button onClick={handleDelete} className="flex items-center gap-1.5 rounded-lg border border-red/30 bg-red/10 px-3 py-1.5 text-xs font-medium text-red hover:bg-red/15 transition-colors">
-                Confirm Delete
-              </button>
+              <div className="flex flex-col gap-2">
+                {dependency && dependency.consumerCount > 0 && (
+                  <div className="max-w-md rounded-lg border border-red/30 bg-red/10 px-3 py-2 text-xs text-red">
+                    <div className="font-medium uppercase tracking-wide">Downstream Impact</div>
+                    <div className="mt-1">{dependency.summary}</div>
+                  </div>
+                )}
+                <button onClick={handleDelete} className="flex items-center gap-1.5 rounded-lg border border-red/30 bg-red/10 px-3 py-1.5 text-xs font-medium text-red hover:bg-red/15 transition-colors">
+                  Confirm Delete
+                </button>
+              </div>
             )}
-            {asset.type === 'mcp' && (
-              <button
-                onClick={handleListTools}
-                disabled={loadingTools || !canInspectTools}
-                title={canInspectTools ? 'Test MCP transport and list tools' : 'Tool discovery is unavailable until blocking MCP issues are fixed'}
-                className="flex items-center gap-1.5 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-400 hover:bg-emerald-500/15 transition-colors disabled:opacity-40 disabled:hover:bg-emerald-500/10"
-              >
-                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" /></svg>
-                {loadingTools ? 'Connecting...' : toolsLoaded ? 'Refresh Tools' : 'Test & List Tools'}
-              </button>
-            )}
+            {/* Run Check button — hidden for now */}
           </div>
-
-          {/* Tools error */}
-          {toolsError && <div className="mt-3 text-xs text-red">{toolsError}</div>}
-
-          {/* MCP Tools list */}
-          {mcpTools.length > 0 && (
-            <div className="mt-4 space-y-1">
-              <div className="text-[11px] font-semibold uppercase tracking-wider text-muted mb-2">{mcpTools.length} tools available</div>
-              {mcpTools.map((tool) => (
-                <div key={tool.name} className="flex items-start gap-2 px-3 py-2 rounded-lg bg-[hsl(240,4%,13%)] text-xs">
-                  <span className="font-mono text-emerald-400 font-medium shrink-0">{tool.name}</span>
-                  <span className="text-accent-fg">{tool.description}</span>
-                </div>
-              ))}
-            </div>
-          )}
 
           {/* Description */}
           <div className="mt-4">
@@ -264,132 +323,78 @@ export function AssetDetail({ asset, topology, onClose, onDeleted, onConnect }: 
               </div>
 
               <div className="mt-3 space-y-2">
-                {asset.capabilities.providers.map((provider) => (
-                  <div key={provider.provider} className="rounded-lg border border-border bg-[hsl(240,5%,10%)] px-3 py-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="text-sm font-medium text-accent-fg">{provider.label}</div>
-                        <div className="mt-1 text-xs text-muted">{provider.detail}</div>
-                        {provider.targetPath && (
-                          <div className="mt-1 font-mono text-[11px] text-muted">{provider.targetPath}</div>
-                        )}
+                {asset.capabilities.providers.filter((p) => p.state !== 'unsupported').map((provider) => {
+                  const isSource = provider.state === 'active';
+                  const isConnected = isSource || provider.state === 'configured';
+                  const canAdd = !isConnected && !readOnly && (provider.state === 'available' || provider.state === 'missing');
+                  const isConnecting = connectingProvider === provider.provider;
+                  const statusLabel = isSource ? 'Connected' : CAPABILITY_STATE_LABELS[provider.state];
+                  const statusStyle = isSource ? CAPABILITY_STYLES.configured : (CAPABILITY_STYLES[provider.state] || CAPABILITY_STYLES.available);
+
+                  const handleConnect = async () => {
+                    setConnectingProvider(provider.provider);
+                    try {
+                      await connectAsset(asset.id, provider.provider, asset.type);
+                      showToast(`Connected to ${provider.label}`);
+                      await onUpdated?.();
+                    } catch {
+                      showToast('Connection failed');
+                    } finally {
+                      setConnectingProvider(null);
+                    }
+                  };
+
+                  return (
+                    <div key={provider.provider} className="rounded-lg border border-border bg-[hsl(240,5%,10%)] px-3 py-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium text-accent-fg">{provider.label}</span>
+                            {isSource && (
+                              <span className="inline-flex rounded-full border border-blue/30 bg-blue/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-blue-300">
+                                Source
+                              </span>
+                            )}
+                          </div>
+                          {provider.targetPath && (
+                            <div className="mt-1 font-mono text-[11px] text-muted truncate">{provider.targetPath}</div>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className={`inline-flex rounded-full border px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-wider ${statusStyle}`}>
+                            {statusLabel}
+                          </span>
+                          {canAdd && (
+                            <button
+                              onClick={() => void handleConnect()}
+                              disabled={isConnecting}
+                              className="flex h-6 w-6 items-center justify-center rounded-full border border-border hover:bg-emerald-500/10 hover:border-emerald-500/30 hover:text-emerald-400 transition-colors disabled:opacity-40"
+                              title={`Connect to ${provider.label}`}
+                            >
+                              {isConnecting ? (
+                                <svg className="h-3 w-3 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 12a8 8 0 018-8" /></svg>
+                              ) : (
+                                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" /></svg>
+                              )}
+                            </button>
+                          )}
+                        </div>
                       </div>
-                      <span className={`inline-flex rounded-full border px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-wider ${CAPABILITY_STYLES[provider.state] || CAPABILITY_STYLES.available}`}>
-                        {CAPABILITY_STATE_LABELS[provider.state]}
-                      </span>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
 
-          {(topologyInfo.environmentNodes.length > 0 || topologyInfo.projectNodes.length > 0 || topologyInfo.providerLinks.length > 0 || topologyInfo.dependsOn.length > 0 || topologyInfo.dependedOnBy.length > 0) && (
-            <div className="mt-4 rounded-lg border border-border bg-[hsl(240,4%,13%)] p-4">
-              <div className="text-[11px] font-semibold uppercase tracking-wider text-muted">
-                Topology
-              </div>
-              <div className="mt-3 space-y-3 text-xs text-accent-fg">
-                {topologyInfo.environmentNodes.length > 0 && (
-                  <div>
-                    <div className="text-[10px] font-semibold uppercase tracking-wider text-muted">Environment</div>
-                    <div className="mt-1 flex flex-wrap gap-2">
-                      {topologyInfo.environmentNodes.map((node) => (
-                        <span key={node.id} className="rounded-full bg-[hsl(240,5%,16%)] px-2.5 py-1">
-                          {node.label}
-                          {node.badges?.length ? ` · ${node.badges.join(', ')}` : ''}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
+          {/* Drift Map — hidden for now */}
+          {/* Suggested Fixes — hidden for now */}
 
-                {topologyInfo.projectNodes.length > 0 && (
-                  <div>
-                    <div className="text-[10px] font-semibold uppercase tracking-wider text-muted">Projects</div>
-                    <div className="mt-1 flex flex-wrap gap-2">
-                      {topologyInfo.projectNodes.map((node) => (
-                        <span key={node.id} className="rounded-full bg-[hsl(240,5%,16%)] px-2.5 py-1">
-                          {node.label}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
+          {/* Dependency Graph — hidden for now */}
 
-                {topologyInfo.providerLinks.length > 0 && (
-                  <div>
-                    <div className="text-[10px] font-semibold uppercase tracking-wider text-muted">Providers</div>
-                    <div className="mt-1 flex flex-wrap gap-2">
-                      {topologyInfo.providerLinks.map(({ node, edge }) => (
-                        <span key={edge.id} className={`rounded-full px-2.5 py-1 ${
-                          edge.state === 'invalid'
-                            ? 'bg-red/10 text-red'
-                            : edge.state === 'missing'
-                              ? 'bg-amber-500/10 text-amber-300'
-                              : edge.state === 'active'
-                                ? 'bg-blue/10 text-blue-300'
-                                : 'bg-[hsl(240,5%,16%)] text-accent-fg'
-                        }`}>
-                          {node.label}
-                          {edge.state ? ` · ${CAPABILITY_STATE_LABELS[edge.state]}` : ''}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {topologyInfo.dependsOn.length > 0 && (
-                  <div>
-                    <div className="text-[10px] font-semibold uppercase tracking-wider text-muted">Depends On</div>
-                    <div className="mt-1 flex flex-wrap gap-2">
-                      {topologyInfo.dependsOn.map((node) => (
-                        <span key={node.id} className="rounded-full bg-[hsl(240,5%,16%)] px-2.5 py-1 font-mono text-violet">
-                          {node.label}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {topologyInfo.dependedOnBy.length > 0 && (
-                  <div>
-                    <div className="text-[10px] font-semibold uppercase tracking-wider text-muted">Used By</div>
-                    <div className="mt-1 flex flex-wrap gap-2">
-                      {topologyInfo.dependedOnBy.map((node) => (
-                        <span key={node.id} className="rounded-full bg-[hsl(240,5%,16%)] px-2.5 py-1">
-                          {node.label}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {asset.health && asset.health.issues.length > 0 && (
-            <div className="mt-4 rounded-lg border border-border bg-[hsl(240,4%,13%)] p-4">
-              <div className="text-[11px] font-semibold uppercase tracking-wider text-muted mb-3">
-                Health
-              </div>
-              <div className="space-y-2">
-                {asset.health.issues.map((issue) => (
-                  <div
-                    key={`${issue.level}-${issue.code}`}
-                    className={`rounded-lg border px-3 py-2 text-xs ${
-                      issue.level === 'blocking'
-                        ? 'border-red/30 bg-red/10 text-red'
-                        : 'border-amber-500/30 bg-amber-500/10 text-amber-300'
-                    }`}
-                  >
-                    <div className="font-medium uppercase tracking-wide">{issue.level === 'blocking' ? 'Blocking' : 'Warning'}</div>
-                    <div className="mt-1">{issue.message}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          {/* Topology — hidden for now */}
+          {/* Health — hidden for now */}
+          {/* Runtime Check — hidden for now */}
 
           {/* Content */}
           <div className="mt-4">

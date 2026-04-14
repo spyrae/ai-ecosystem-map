@@ -1,12 +1,27 @@
-import { useEffect, useMemo, useState } from 'react';
-import type { Asset, AssetType, BatchSyncPreview, DiffPair, DiffResult, Environment, Provider, SyncPlan, SyncRequest, TopologyGraph } from '../types';
-import { PROVIDER_LABELS, TYPE_LABELS } from '../types';
-import { fetchServers, fetchTopology, addServer, testServer, scanServer, diffServer, previewSync, applySync, previewBatchSync, applyBatchSync, discoverRemoteProjects } from '../lib/api';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { Asset, AssetType, AuditMode, BatchSyncPreview, DiffPair, DiffResult, Environment, Provider, RemediationSuggestion, SyncPlan, SyncRequest, TopologyGraph } from '../types';
+import { PROVIDER_LABELS, TYPE_LABELS, policySummaryItems } from '../types';
+import { fetchServers, fetchTopology, addServer, testServer, scanServer, diffServer, fetchServerRemediations, previewSync, applySync, previewBatchSync, applyBatchSync, discoverRemoteProjects, setServerReadOnly, applyServerRemediation } from '../lib/api';
 import { getEnvironmentTopologyNode } from '../lib/topology';
 import { SyncPlanModal } from './SyncPlanModal';
 import { BatchSyncPlanModal } from './BatchSyncPlanModal';
 
-export function ServersView() {
+export function ServersView({
+  auditMode,
+  onAuditModeChange,
+  focusServerId,
+  onFocusConsumed,
+}: {
+  auditMode: AuditMode | null;
+  onAuditModeChange: (mode: AuditMode | null) => void;
+  focusServerId?: string | null;
+  onFocusConsumed?: () => void;
+}) {
+  const buildApproval = useCallback((note?: string | null) => ({
+    confirmed: true,
+    note: note ?? null,
+    source: 'web',
+  }), []);
   const [servers, setServers] = useState<Environment[]>([]);
   const [topology, setTopology] = useState<TopologyGraph | null>(null);
   const [loading, setLoading] = useState(true);
@@ -30,6 +45,11 @@ export function ServersView() {
   const [batchTitle, setBatchTitle] = useState('');
   const [batchLoading, setBatchLoading] = useState(false);
   const [applyingBatchSync, setApplyingBatchSync] = useState(false);
+  const [readOnlyUpdating, setReadOnlyUpdating] = useState<Record<string, boolean>>({});
+  const [serverRemediations, setServerRemediations] = useState<Record<string, RemediationSuggestion[]>>({});
+  const [serverRemediationLoading, setServerRemediationLoading] = useState<Record<string, boolean>>({});
+  const [applyingServerRemediationId, setApplyingServerRemediationId] = useState<string | null>(null);
+  const globalReadOnly = auditMode?.global_read_only === true;
 
   const loadServers = async () => {
     try {
@@ -45,10 +65,18 @@ export function ServersView() {
 
   useEffect(() => { loadServers(); }, []);
 
-  const showToast = (msg: string) => {
+  const showToast = useCallback((msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(null), 3000);
-  };
+  }, []);
+
+  const isServerReadOnly = (server: Environment) =>
+    globalReadOnly || auditMode?.environments.some((entry) => entry.environment_id === server.id && entry.read_only) === true;
+
+  const serverReadOnlyReason = (server: Environment) =>
+    globalReadOnly
+      ? 'Global read-only audit mode is enabled.'
+      : `${server.name} is in read-only audit mode.`;
 
   const handleAdd = async () => {
     if (!form.name || !form.ssh_host || !form.ssh_user) return;
@@ -104,18 +132,30 @@ export function ServersView() {
     }
   };
 
+  const openServerPanel = useCallback(async (id: string) => {
+    setExpandedServer(id);
+    setServerRemediationLoading((prev) => ({ ...prev, [id]: true }));
+    try {
+      const [res, remediationRes] = await Promise.all([
+        diffServer(id),
+        fetchServerRemediations(id).catch(() => ({ data: [] as RemediationSuggestion[] })),
+      ]);
+      setDiffData((prev) => ({ ...prev, [id]: res.data }));
+      setServerRemediations((prev) => ({ ...prev, [id]: remediationRes.data || [] }));
+    } catch (err) {
+      console.error('Diff failed:', err);
+      showToast('Failed to load diff');
+    } finally {
+      setServerRemediationLoading((prev) => ({ ...prev, [id]: false }));
+    }
+  }, [showToast]);
+
   const handleDiff = async (id: string) => {
     if (expandedServer === id) {
       setExpandedServer(null);
       return;
     }
-    setExpandedServer(id);
-    try {
-      const res = await diffServer(id);
-      setDiffData((prev) => ({ ...prev, [id]: res.data }));
-    } catch (err) {
-      console.error('Diff failed:', err);
-    }
+    await openServerPanel(id);
   };
 
   const handleDiscoverProjects = async (id: string) => {
@@ -132,6 +172,24 @@ export function ServersView() {
       showToast('Remote project discovery failed');
     } finally {
       setDiscoveringProjects((prev) => ({ ...prev, [id]: false }));
+    }
+  };
+
+  const handleToggleServerReadOnly = async (server: Environment) => {
+    if (globalReadOnly) {
+      showToast('Disable global read-only audit mode before changing server policy');
+      return;
+    }
+    setReadOnlyUpdating((prev) => ({ ...prev, [server.id]: true }));
+    try {
+      const res = await setServerReadOnly(server.id, !isServerReadOnly(server));
+      onAuditModeChange(res.data);
+      showToast(`${server.name} ${isServerReadOnly(server) ? 'write access restored' : 'set to read-only audit mode'}`);
+    } catch (err) {
+      console.error('Failed to update read-only policy:', err);
+      showToast('Failed to update read-only policy');
+    } finally {
+      setReadOnlyUpdating((prev) => ({ ...prev, [server.id]: false }));
     }
   };
 
@@ -168,10 +226,39 @@ export function ServersView() {
   const refreshExpandedServerDiff = async () => {
     if (!expandedServer) return;
     try {
-      const res = await diffServer(expandedServer);
+      const [res, remediationRes] = await Promise.all([
+        diffServer(expandedServer),
+        fetchServerRemediations(expandedServer).catch(() => ({ data: [] as RemediationSuggestion[] })),
+      ]);
       setDiffData((prev) => ({ ...prev, [expandedServer]: res.data }));
+      setServerRemediations((prev) => ({ ...prev, [expandedServer]: remediationRes.data || [] }));
     } catch (err) {
       console.error('Failed to refresh diff:', err);
+    }
+  };
+
+  const handleApplyServerRemediation = async (server: Environment, suggestion: RemediationSuggestion) => {
+    if (!suggestion.canApply || isServerReadOnly(server)) return;
+    if (suggestion.risky && !window.confirm(`${suggestion.title}\n\n${suggestion.summary}\n\nThis remediation will overwrite existing server configuration. Continue?`)) {
+      return;
+    }
+    setApplyingServerRemediationId(suggestion.id);
+    try {
+      const res = await applyServerRemediation(server.id, suggestion.id, {
+        confirmRisk: suggestion.risky,
+        approval: buildApproval(suggestion.risky ? `Approved risky remediation for ${server.name}` : `Approved remediation for ${server.name}`),
+      });
+      if (!res.ok) {
+        showToast(res.error || 'Failed to apply remediation');
+        return;
+      }
+      showToast('Server remediation applied');
+      await refreshExpandedServerDiff();
+    } catch (err) {
+      console.error('Failed to apply server remediation:', err);
+      showToast(err instanceof Error ? err.message : 'Failed to apply remediation');
+    } finally {
+      setApplyingServerRemediationId(null);
     }
   };
 
@@ -179,7 +266,7 @@ export function ServersView() {
     if (!syncRequest) return;
     setApplyingSync(true);
     try {
-      const res = await applySync(syncRequest);
+      const res = await applySync(syncRequest, buildApproval(`Approved server sync for ${syncRequest.source.name}`));
       if (res.ok) {
         showToast(`Applied sync for ${syncRequest.source.name}`);
         setSyncPlan(null);
@@ -200,7 +287,7 @@ export function ServersView() {
     if (!batchRequests) return;
     setApplyingBatchSync(true);
     try {
-      const result = await applyBatchSync(batchRequests);
+      const result = await applyBatchSync(batchRequests, buildApproval(`Approved batch sync for ${batchRequests.length} server assets`));
       showToast(`Applied batch sync: ${result.successCount}/${result.total} assets`);
       setBatchPreview(null);
       setBatchRequests(null);
@@ -247,6 +334,39 @@ export function ServersView() {
     }, `Pull ${asset.name} from remote`);
   };
 
+  const serverById = (serverId?: string | null) =>
+    serverId ? servers.find((server) => server.id === serverId) ?? null : null;
+
+  const pendingSyncServer = syncRequest?.target.kind === 'server'
+    ? serverById(syncRequest.target.serverId)
+    : null;
+  const pendingSyncReadOnly = pendingSyncServer ? isServerReadOnly(pendingSyncServer) : globalReadOnly;
+  const pendingSyncReadOnlyReason = pendingSyncServer
+    ? serverReadOnlyReason(pendingSyncServer)
+    : (globalReadOnly ? 'Global read-only audit mode is enabled.' : undefined);
+
+  const pendingBatchServer = batchRequests
+    ?.flatMap((request) => {
+      if (request.target.kind !== 'server') return [];
+      const server = serverById(request.target.serverId);
+      return server ? [server] : [];
+    })
+    .find((server) => isServerReadOnly(server)) ?? null;
+  const pendingBatchReadOnly = Boolean(pendingBatchServer ? isServerReadOnly(pendingBatchServer) : globalReadOnly);
+  const pendingBatchReadOnlyReason = pendingBatchServer
+    ? serverReadOnlyReason(pendingBatchServer)
+    : (globalReadOnly ? 'Global read-only audit mode is enabled.' : undefined);
+
+  useEffect(() => {
+    if (!focusServerId) return;
+    const server = servers.find((entry) => entry.id === focusServerId && entry.type === 'remote');
+    if (!server) return;
+    if (expandedServer !== server.id) {
+      void openServerPanel(server.id);
+    }
+    onFocusConsumed?.();
+  }, [expandedServer, focusServerId, onFocusConsumed, openServerPanel, servers]);
+
   const remoteServers = servers.filter((s) => s.type === 'remote');
   const localServer = servers.find((s) => s.type === 'local');
   const localTopology = localServer ? getEnvironmentTopologyNode(topology, localServer.id, 'local') : null;
@@ -262,6 +382,12 @@ export function ServersView() {
           + Add Server
         </button>
       </div>
+
+      {globalReadOnly && (
+        <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+          Global read-only audit mode is enabled. Remote server sync actions stay available for preview, but apply actions are disabled.
+        </div>
+      )}
 
       {/* Add form */}
       {showAdd && (
@@ -330,7 +456,12 @@ export function ServersView() {
                   <div className="text-[11px] text-muted">Local machine</div>
                   {localTopology?.summary && (
                     <div className="text-[11px] text-muted mt-0.5">
-                      {(localTopology.summary.projectCount || 0)} projects · {(localTopology.summary.providerCount || 0)} providers · {(localTopology.summary.agentCount || 0)} agents
+                      {[
+                        `${localTopology.summary.projectCount || 0} projects`,
+                        `${localTopology.summary.providerCount || 0} providers`,
+                        `${localTopology.summary.agentCount || 0} agents`,
+                        ...policySummaryItems(localServer.policy),
+                      ].join(' · ')}
                     </div>
                   )}
                 </div>
@@ -350,6 +481,7 @@ export function ServersView() {
 
           {remoteServers.map((server) => {
             const serverTopology = getEnvironmentTopologyNode(topology, server.id, 'remote');
+            const serverReadOnly = isServerReadOnly(server);
             return (
             <div key={server.id}>
               <div className="bg-surface border border-border rounded-lg p-4">
@@ -364,12 +496,31 @@ export function ServersView() {
                     </div>
                     {serverTopology?.summary && (
                       <div className="text-[11px] text-muted mt-0.5">
-                        {(serverTopology.summary.projectCount || 0)} projects · {(serverTopology.summary.providerCount || 0)} providers · {(serverTopology.summary.agentCount || 0)} agents
+                        {[
+                          `${serverTopology.summary.projectCount || 0} projects`,
+                          `${serverTopology.summary.providerCount || 0} providers`,
+                          `${serverTopology.summary.agentCount || 0} agents`,
+                          ...policySummaryItems(server.policy),
+                        ].join(' · ')}
                       </div>
                     )}
                   </div>
                   {scanResults[server.id] !== undefined && (
                     <span className="text-xs text-accent">{scanResults[server.id]} assets</span>
+                  )}
+                  {serverReadOnly && (
+                    <span className="rounded border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-xs text-amber-300">
+                      read-only
+                    </span>
+                  )}
+                  {server.policy && server.policy.violationCount > 0 && (
+                    <span className={`rounded border px-2 py-0.5 text-xs ${
+                      server.policy.status === 'broken'
+                        ? 'border-red/30 bg-red/10 text-red'
+                        : 'border-amber-400/30 bg-amber-400/10 text-amber-200'
+                    }`}>
+                      {server.policy.blockingCount > 0 ? `${server.policy.blockingCount} blocking` : `${server.policy.warningCount} warning`}
+                    </span>
                   )}
                 </div>
 
@@ -379,6 +530,54 @@ export function ServersView() {
                     testResults[server.id].ok ? 'bg-green/10 text-green' : 'bg-red/10 text-red'
                   }`}>
                     {testResults[server.id].msg}
+                  </div>
+                )}
+
+                {server.policy && server.policy.violations.length > 0 && (
+                  <div className={`mb-3 rounded-lg border px-3 py-2 text-xs ${
+                    server.policy.status === 'broken'
+                      ? 'border-red/30 bg-red/10 text-red'
+                      : 'border-amber-400/30 bg-amber-400/10 text-amber-200'
+                  }`}>
+                    <div className="font-medium">Policy</div>
+                    <div className="mt-0.5">{server.policy.summary}</div>
+                  </div>
+                )}
+
+                {(serverRemediationLoading[server.id] || (serverRemediations[server.id] || []).length > 0) && (
+                  <div className="mb-3 rounded-lg border border-border bg-surface/60 px-3 py-3">
+                    <div className="text-[11px] font-semibold uppercase tracking-wider text-muted">
+                      Suggested Fixes
+                    </div>
+                    {serverRemediationLoading[server.id] ? (
+                      <div className="mt-2 text-[11px] text-muted">Checking available remediations…</div>
+                    ) : (
+                      <div className="mt-2 space-y-2">
+                        {(serverRemediations[server.id] || []).map((suggestion) => (
+                          <div key={suggestion.id} className="rounded-md border border-border/70 bg-bg/60 px-2.5 py-2">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="text-xs font-medium text-text">{suggestion.title}</div>
+                                <div className="mt-0.5 text-[11px] text-muted">{suggestion.summary}</div>
+                              </div>
+                              {suggestion.canApply ? (
+                                <button
+                                  onClick={() => void handleApplyServerRemediation(server, suggestion)}
+                                  disabled={isServerReadOnly(server) || applyingServerRemediationId === suggestion.id}
+                                  className="rounded-lg border border-border px-2.5 py-1 text-[11px] font-medium text-text transition-colors hover:border-accent/50 hover:text-accent disabled:opacity-40"
+                                >
+                                  {applyingServerRemediationId === suggestion.id ? 'Applying…' : suggestion.applyLabel || 'Apply'}
+                                </button>
+                              ) : (
+                                <span className="rounded-full bg-[hsl(240,5%,16%)] px-2 py-0.5 text-[10px] uppercase tracking-wider text-muted">
+                                  guided
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -414,6 +613,18 @@ export function ServersView() {
                   >
                     Diff
                   </button>
+                  <button
+                    onClick={() => void handleToggleServerReadOnly(server)}
+                    disabled={globalReadOnly || readOnlyUpdating[server.id]}
+                    className="px-3 py-1.5 text-xs border border-border rounded-lg text-muted hover:text-text hover:border-accent/50 transition-colors disabled:opacity-40"
+                    title={globalReadOnly ? 'Disable global read-only mode first' : undefined}
+                  >
+                    {readOnlyUpdating[server.id]
+                      ? 'Updating...'
+                      : serverReadOnly
+                        ? 'Enable Writes'
+                        : 'Read-Only'}
+                  </button>
                 </div>
               </div>
 
@@ -422,6 +633,8 @@ export function ServersView() {
                 <DiffView
                   diff={diffData[server.id]}
                   serverId={server.id}
+                  readOnly={serverReadOnly}
+                  readOnlyReason={serverReadOnlyReason(server)}
                   onPush={handlePush}
                   onPull={handlePull}
                   onBatchSync={openBatchSyncPreview}
@@ -445,6 +658,8 @@ export function ServersView() {
           plan={syncPlan}
           applying={applyingSync || syncLoading}
           title={syncLoading ? 'Building sync preview...' : syncTitle}
+          readOnly={pendingSyncReadOnly}
+          readOnlyReason={pendingSyncReadOnlyReason}
           onApply={handleApplySync}
           onClose={() => {
             if (applyingSync || syncLoading) return;
@@ -460,6 +675,8 @@ export function ServersView() {
           loading={batchLoading}
           applying={applyingBatchSync}
           title={batchLoading ? 'Building batch sync preview...' : batchTitle}
+          readOnly={pendingBatchReadOnly}
+          readOnlyReason={pendingBatchReadOnlyReason}
           onApply={handleApplyBatchSync}
           onClose={() => {
             if (batchLoading || applyingBatchSync) return;
@@ -475,12 +692,16 @@ export function ServersView() {
 function DiffView({
   diff,
   serverId,
+  readOnly = false,
+  readOnlyReason,
   onPush,
   onPull,
   onBatchSync,
 }: {
   diff: DiffResult;
   serverId: string;
+  readOnly?: boolean;
+  readOnlyReason?: string;
   onPush: (id: string, asset: Asset) => void;
   onPull: (id: string, asset: Asset) => void;
   onBatchSync: (requests: SyncRequest[], title: string) => Promise<void>;
@@ -531,6 +752,11 @@ function DiffView({
 
   return (
     <div className="mt-1 ml-4 border-l-2 border-accent/30 pl-4 py-3 space-y-4">
+      {readOnly && (
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+          {readOnlyReason || 'Read-only audit mode is enabled for this server.'}
+        </div>
+      )}
       <div className="flex gap-4 text-xs text-muted">
         <span>Local: <strong className="text-text">{diff.localCount}</strong></span>
         <span>Remote: <strong className="text-text">{diff.remoteCount}</strong></span>
@@ -563,28 +789,28 @@ function DiffView({
         </select>
         <button
           onClick={() => void openBatchSync(filteredOnlyLocal, 'push', `Push ${filteredOnlyLocal.length} assets to remote`)}
-          disabled={filteredOnlyLocal.length === 0}
+          disabled={readOnly || filteredOnlyLocal.length === 0}
           className="rounded-lg border border-orange/30 bg-orange/10 px-3 py-1.5 text-xs font-medium text-orange hover:bg-orange/15 transition-colors disabled:opacity-40"
         >
           Push Visible Only-Local
         </button>
         <button
           onClick={() => void openBatchSync(filteredOnlyRemote, 'pull', `Pull ${filteredOnlyRemote.length} assets from remote`)}
-          disabled={filteredOnlyRemote.length === 0}
+          disabled={readOnly || filteredOnlyRemote.length === 0}
           className="rounded-lg border border-cyan/30 bg-cyan/10 px-3 py-1.5 text-xs font-medium text-cyan hover:bg-cyan/15 transition-colors disabled:opacity-40"
         >
           Pull Visible Only-Remote
         </button>
         <button
           onClick={() => void openBatchSync(filteredDrifted, 'push', `Push ${filteredDrifted.length} drifted assets`)}
-          disabled={filteredDrifted.length === 0}
+          disabled={readOnly || filteredDrifted.length === 0}
           className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs font-medium text-amber-300 hover:bg-amber-500/15 transition-colors disabled:opacity-40"
         >
           Push Visible Drifted
         </button>
         <button
           onClick={() => void openBatchSync(filteredDrifted, 'pull', `Pull ${filteredDrifted.length} drifted assets`)}
-          disabled={filteredDrifted.length === 0}
+          disabled={readOnly || filteredDrifted.length === 0}
           className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs font-medium text-amber-300 hover:bg-amber-500/15 transition-colors disabled:opacity-40"
         >
           Pull Visible Drifted
@@ -603,7 +829,8 @@ function DiffView({
                 {syncableTypes.has(a.type) && (
                   <button
                     onClick={() => onPush(serverId, a)}
-                    className="px-2 py-0.5 rounded border border-orange/50 text-orange hover:bg-orange/15 transition-colors"
+                    disabled={readOnly}
+                    className="px-2 py-0.5 rounded border border-orange/50 text-orange hover:bg-orange/15 transition-colors disabled:opacity-40"
                   >
                     Push →
                   </button>
@@ -623,10 +850,11 @@ function DiffView({
               <div key={`${a.type}-${a.name}`} className="flex items-center gap-2 px-2 py-1.5 rounded bg-surface text-xs">
                 <span className="font-mono text-accent truncate flex-1">{a.name}</span>
                 <span className="text-muted">{a.type}</span>
-                {syncableTypes.has(a.type) && a.filePath && (
+                {syncableTypes.has(a.type) && (
                   <button
                     onClick={() => onPull(serverId, a)}
-                    className="px-2 py-0.5 rounded border border-cyan/50 text-cyan hover:bg-cyan/15 transition-colors"
+                    disabled={readOnly}
+                    className="px-2 py-0.5 rounded border border-cyan/50 text-cyan hover:bg-cyan/15 transition-colors disabled:opacity-40"
                   >
                     ← Pull
                   </button>
@@ -655,13 +883,15 @@ function DiffView({
                         <>
                           <button
                             onClick={() => onPush(serverId, pair.local)}
-                            className="px-2 py-0.5 rounded border border-orange/50 text-orange hover:bg-orange/15 transition-colors"
+                            disabled={readOnly}
+                            className="px-2 py-0.5 rounded border border-orange/50 text-orange hover:bg-orange/15 transition-colors disabled:opacity-40"
                           >
                             Push →
                           </button>
                           <button
                             onClick={() => onPull(serverId, pair.remote)}
-                            className="px-2 py-0.5 rounded border border-cyan/50 text-cyan hover:bg-cyan/15 transition-colors"
+                            disabled={readOnly}
+                            className="px-2 py-0.5 rounded border border-cyan/50 text-cyan hover:bg-cyan/15 transition-colors disabled:opacity-40"
                           >
                             ← Pull
                           </button>

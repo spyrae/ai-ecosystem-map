@@ -4,7 +4,9 @@
 [![CI](https://github.com/spyrae/ai-ecosystem-map/actions/workflows/ci.yml/badge.svg)](https://github.com/spyrae/ai-ecosystem-map/actions/workflows/ci.yml)
 [![License: BSL 2.0](https://img.shields.io/badge/License-BSL_2.0-orange.svg)](LICENSE)
 
-Visual control plane for your AI coding ecosystem. Auto-discovers skills, agents, MCP servers, rules, and instructions from **7 AI coding tools** — with real-time sync, connect/disconnect, and a native macOS app.
+Harness control plane for agent tooling across local machines, projects, remote servers, and running runtimes. Auto-discovers skills, agents, MCP servers, rules, and instructions from **7 AI coding tools** — with real-time sync, connect/disconnect, and a native macOS app.
+
+Short mark: `AEM`
 
 <p align="center">
   <img src="docs/screenshot-macos.png" alt="AEM — macOS App" width="800">

@@ -70,6 +70,12 @@ struct CreateAssetSheet: View {
             Divider()
 
             Form {
+                if store.globalReadOnly {
+                    Text("Global read-only audit mode is enabled. Creating new assets is disabled until audit mode is turned off.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+
                 Section {
                     TextField("Name", text: $name)
                         .textFieldStyle(.roundedBorder)
@@ -133,7 +139,7 @@ struct CreateAssetSheet: View {
                 }
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
-                .disabled(name.isEmpty || isCreating)
+                .disabled(store.globalReadOnly || name.isEmpty || isCreating)
             }
             .padding()
         }
@@ -164,6 +170,10 @@ struct CreateAssetSheet: View {
     }
 
     private func create() async {
+        guard !store.globalReadOnly else {
+            store.showToast("Global read-only audit mode is enabled")
+            return
+        }
         isCreating = true
         defer { isCreating = false }
         do {

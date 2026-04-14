@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   DndContext,
   PointerSensor,
@@ -9,9 +9,9 @@ import {
   useDraggable,
 } from '@dnd-kit/core';
 import type { DragStartEvent, DragEndEvent } from '@dnd-kit/core';
-import type { BatchSyncPreview, Project, ProjectAsset, Provider, SyncPlan, SyncRequest, TopologyGraph } from '../types';
-import { PROVIDER_LABELS, TYPE_LABELS, capabilitySummaryItems } from '../types';
-import { fetchProjects, discoverProjects, fetchProjectAssetsById, fetchTopology, applySync, previewSync, previewBatchSync, applyBatchSync } from '../lib/api';
+import type { AuditMode, BatchSyncPreview, DriftGraph, GitContext, Project, ProjectAsset, Provider, RemediationSuggestion, SyncPlan, SyncRequest, TopologyGraph } from '../types';
+import { DRIFT_STATUS_LABELS, PROVIDER_LABELS, TYPE_LABELS, capabilitySummaryItems, policySummaryItems } from '../types';
+import { fetchProjects, discoverProjects, fetchProjectAssetsById, fetchProjectRemediations, fetchTopology, fetchDrift, applyProjectRemediation, applySync, previewSync, previewBatchSync, applyBatchSync, updateProject } from '../lib/api';
 import { getProjectTopologyNode } from '../lib/topology';
 import { ProviderBadge } from './ProviderBadge';
 import { SyncPlanModal } from './SyncPlanModal';
@@ -25,6 +25,19 @@ const TYPE_ICONS: Record<string, string> = {
   rule: '📏',
 };
 
+function gitStatusTone(git?: GitContext | null) {
+  if (!git) return 'text-muted';
+  if (git.conflictedCount > 0) return 'text-red';
+  if (git.dirty) return 'text-orange';
+  return 'text-emerald-300';
+}
+
+function gitBadgeLabel(git?: GitContext | null) {
+  if (!git) return null;
+  if (git.conflictedCount > 0) return `${git.conflictedCount} conflicts`;
+  return git.dirty ? 'dirty' : 'clean';
+}
+
 // Draggable asset row inside expanded project
 function DraggableAssetRow({
   asset,
@@ -32,12 +45,14 @@ function DraggableAssetRow({
   selectionMode = false,
   selected = false,
   onToggleSelection,
+  driftSummary,
 }: {
   asset: ProjectAsset;
   dragDisabled?: boolean;
   selectionMode?: boolean;
   selected?: boolean;
   onToggleSelection?: (asset: ProjectAsset) => void;
+  driftSummary?: string | null;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `project-asset-${asset.type}-${asset.name}-${asset.projectPath}`,
@@ -45,6 +60,7 @@ function DraggableAssetRow({
     disabled: selectionMode || dragDisabled,
   });
   const capabilityItems = capabilitySummaryItems(asset.capabilities).slice(0, 2);
+  const gitBadge = asset.git?.relevantStatus && asset.git.relevantStatus !== 'clean' ? asset.git.relevantStatus : null;
 
   return (
     <div
@@ -90,6 +106,30 @@ function DraggableAssetRow({
           {asset.health.status === 'broken' ? '●' : '▲'}
         </span>
       )}
+      {asset.drift && (
+        <span
+          className={`text-[10px] font-medium shrink-0 ${
+            asset.drift.status === 'orphaned'
+              ? 'text-red'
+              : asset.drift.status === 'drifted'
+                ? 'text-amber-300'
+                : asset.drift.status === 'source'
+                  ? 'text-sky-300'
+                  : 'text-emerald-300'
+          }`}
+          title={driftSummary || asset.drift.summary}
+        >
+          {DRIFT_STATUS_LABELS[asset.drift.status]}
+        </span>
+      )}
+      {gitBadge && (
+        <span
+          className={`text-[10px] font-medium shrink-0 ${gitStatusTone(asset.git)}`}
+          title={asset.git?.summary}
+        >
+          {gitBadge}
+        </span>
+      )}
       <span className="font-mono text-accent truncate">{asset.name}</span>
       <span className="text-muted truncate flex-1">{asset.desc}</span>
       {capabilityItems.length > 0 && (
@@ -114,6 +154,7 @@ function DroppableProjectCard({
   onExpand,
   children,
   summaryText,
+  git,
 }: {
   project: Project;
   isExpanded: boolean;
@@ -121,6 +162,7 @@ function DroppableProjectCard({
   onExpand: () => void;
   children?: React.ReactNode;
   summaryText?: string | null;
+  git?: GitContext | null;
 }) {
   const { isOver, setNodeRef } = useDroppable({
     id: `project-drop-${project.id}`,
@@ -150,8 +192,32 @@ function DroppableProjectCard({
                   Remote
                 </span>
               )}
+              {project.project_type && (
+                <span className="rounded-md border border-violet-400/30 bg-violet-400/10 px-1.5 py-0.5 text-[10px] font-medium text-violet-200">
+                  {project.project_type}
+                </span>
+              )}
+              {project.policy && project.policy.violationCount > 0 && (
+                <span className={`rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${
+                  project.policy.status === 'broken'
+                    ? 'border-red/30 bg-red/10 text-red'
+                    : 'border-amber-400/30 bg-amber-400/10 text-amber-200'
+                }`}>
+                  {project.policy.status}
+                </span>
+              )}
               {summaryText && (
                 <span className="text-[11px] text-muted">{summaryText}</span>
+              )}
+              {git && (
+                <>
+                  <span className="rounded-md border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted">
+                    {git.branch}
+                  </span>
+                  <span className={`rounded-md border border-border px-1.5 py-0.5 text-[10px] font-medium ${gitStatusTone(git)}`} title={git.summary}>
+                    {gitBadgeLabel(git)}
+                  </span>
+                </>
               )}
             </div>
             <p className="text-[11px] text-muted font-mono truncate">
@@ -185,9 +251,23 @@ function DroppableProjectCard({
   );
 }
 
-export function ProjectsView() {
+export function ProjectsView({
+  auditMode,
+  focusProjectId,
+  onFocusConsumed,
+}: {
+  auditMode: AuditMode | null;
+  focusProjectId?: string | null;
+  onFocusConsumed?: () => void;
+}) {
+  const buildApproval = useCallback((note?: string | null) => ({
+    confirmed: true,
+    note: note ?? null,
+    source: 'web',
+  }), []);
   const [projects, setProjects] = useState<Project[]>([]);
   const [topology, setTopology] = useState<TopologyGraph | null>(null);
+  const [drift, setDrift] = useState<DriftGraph | null>(null);
   const [discoveredProjects, setDiscoveredProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [scanDir, setScanDir] = useState('');
@@ -206,6 +286,9 @@ export function ProjectsView() {
   const [syncTitle, setSyncTitle] = useState('');
   const [syncLoading, setSyncLoading] = useState(false);
   const [applyingSync, setApplyingSync] = useState(false);
+  const [projectRemediations, setProjectRemediations] = useState<Record<string, RemediationSuggestion[]>>({});
+  const [projectRemediationLoading, setProjectRemediationLoading] = useState<Record<string, boolean>>({});
+  const [applyingProjectRemediationId, setApplyingProjectRemediationId] = useState<string | null>(null);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedProjectAssetIds, setSelectedProjectAssetIds] = useState<Set<string>>(new Set());
   const [typeFilter, setTypeFilter] = useState<'all' | ProjectAsset['type']>('all');
@@ -216,6 +299,10 @@ export function ProjectsView() {
   const [batchTitle, setBatchTitle] = useState('');
   const [batchLoading, setBatchLoading] = useState(false);
   const [applyingBatchSync, setApplyingBatchSync] = useState(false);
+  const [projectTypeDrafts, setProjectTypeDrafts] = useState<Record<string, string>>({});
+  const [projectTypeSavingId, setProjectTypeSavingId] = useState<string | null>(null);
+  const globalReadOnly = auditMode?.global_read_only === true;
+  const readOnlyReason = globalReadOnly ? 'Global read-only audit mode is enabled.' : undefined;
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -223,18 +310,21 @@ export function ProjectsView() {
     })
   );
 
-  const showToast = (msg: string) => {
+  const showToast = useCallback((msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(null), 3000);
-  };
+  }, []);
 
   const loadProjects = async () => {
     try {
-      const [res, topologyRes] = await Promise.all([fetchProjects(), fetchTopology()]);
+      const [res, topologyRes, driftRes] = await Promise.all([fetchProjects(), fetchTopology(), fetchDrift()]);
       setProjects(res.data);
       setTopology(topologyRes.data);
+      setDrift(driftRes.data);
+      return driftRes.data.byAssetId || {};
     } catch (err) {
       console.error('Failed to load projects:', err);
+      return {};
     } finally {
       setLoading(false);
     }
@@ -269,8 +359,9 @@ export function ProjectsView() {
     [displayProjects, expandedProjectId]
   );
   const selectedProjectIsRemote = selectedExpandedProject?.environment_type === 'remote';
+  const driftByAssetId = useMemo(() => drift?.byAssetId || {}, [drift]);
 
-  const handleExpand = async (project: Project) => {
+  const handleExpand = useCallback(async (project: Project) => {
     if (expandedProjectId === project.id) {
       setExpandedProjectId(null);
       setProjectAssets([]);
@@ -282,16 +373,35 @@ export function ProjectsView() {
     setAssetsLoading(true);
     setSelectionMode(false);
     setSelectedProjectAssetIds(new Set());
+    setProjectRemediationLoading((current) => ({ ...current, [project.id]: true }));
     try {
-      const res = await fetchProjectAssetsById(project.id);
-      setProjectAssets(res.data);
+      const [res, remediationRes] = await Promise.all([
+        fetchProjectAssetsById(project.id),
+        fetchProjectRemediations(project.id).catch(() => ({ data: [] as RemediationSuggestion[] })),
+      ]);
+      setProjectAssets(res.data.map((asset) => ({
+        ...asset,
+        drift: driftByAssetId[asset.id] || undefined,
+      })));
+      setProjectRemediations((current) => ({ ...current, [project.id]: remediationRes.data || [] }));
     } catch (err) {
       console.error('Failed to load project assets:', err);
       showToast('Failed to load assets');
     } finally {
       setAssetsLoading(false);
+      setProjectRemediationLoading((current) => ({ ...current, [project.id]: false }));
     }
-  };
+  }, [driftByAssetId, expandedProjectId, showToast]);
+
+  useEffect(() => {
+    if (!focusProjectId) return;
+    const project = displayProjects.find((entry) => entry.id === focusProjectId);
+    if (!project) return;
+    if (expandedProjectId !== project.id) {
+      void handleExpand(project);
+    }
+    onFocusConsumed?.();
+  }, [displayProjects, expandedProjectId, focusProjectId, handleExpand, onFocusConsumed]);
 
   function handleDragStart(event: DragStartEvent) {
     const asset = event.active.data.current?.projectAsset as ProjectAsset | undefined;
@@ -304,6 +414,10 @@ export function ProjectsView() {
     const targetProject = event.over?.data.current?.project as Project | undefined;
 
     if (!asset || !targetProject) return;
+    if (globalReadOnly) {
+      showToast(readOnlyReason || 'Read-only audit mode is enabled');
+      return;
+    }
     // Don't drop onto the same project
     if (asset.projectPath === targetProject.path) return;
     if (asset.environment_type === 'remote') {
@@ -367,17 +481,20 @@ export function ProjectsView() {
     if (!syncRequest) return;
     setApplyingSync(true);
     try {
-      const res = await applySync(syncRequest);
+      const res = await applySync(syncRequest, buildApproval(`Approved project sync for ${syncRequest.source.name}`));
       if (res.ok) {
         const target = syncRequest.target.kind === 'project' ? syncRequest.target.projectPath : '';
         showToast(`Synced ${syncRequest.source.name}${target ? ` → ${target.split('/').pop()}` : ''}`);
         setSyncPlan(null);
         setSyncRequest(null);
+        const latestDrift = await loadProjects();
         if (selectedExpandedProject) {
           const refreshed = await fetchProjectAssetsById(selectedExpandedProject.id);
-          setProjectAssets(refreshed.data);
+          setProjectAssets(refreshed.data.map((asset) => ({
+            ...asset,
+            drift: latestDrift[asset.id] || undefined,
+          })));
         }
-        await loadProjects();
       } else {
         showToast(res.error || 'Sync failed');
       }
@@ -388,6 +505,42 @@ export function ProjectsView() {
       setApplyingSync(false);
     }
   }
+
+  const handleApplyProjectRemediation = async (project: Project, suggestion: RemediationSuggestion) => {
+    if (!suggestion.canApply || globalReadOnly) return;
+    if (suggestion.risky && !window.confirm(`${suggestion.title}\n\n${suggestion.summary}\n\nThis remediation will overwrite existing project content. Continue?`)) {
+      return;
+    }
+    setApplyingProjectRemediationId(suggestion.id);
+    try {
+      const res = await applyProjectRemediation(project.id, suggestion.id, {
+        confirmRisk: suggestion.risky,
+        approval: buildApproval(suggestion.risky ? `Approved risky remediation for ${project.name}` : `Approved remediation for ${project.name}`),
+      });
+      if (!res.ok) {
+        showToast(res.error || 'Failed to apply remediation');
+        return;
+      }
+      showToast('Project remediation applied');
+      const latestDrift = await loadProjects();
+      if (expandedProjectId === project.id) {
+        const [assetsRes, remediationRes] = await Promise.all([
+          fetchProjectAssetsById(project.id),
+          fetchProjectRemediations(project.id),
+        ]);
+        setProjectAssets(assetsRes.data.map((asset) => ({
+          ...asset,
+          drift: latestDrift[asset.id] || undefined,
+        })));
+        setProjectRemediations((current) => ({ ...current, [project.id]: remediationRes.data || [] }));
+      }
+    } catch (err) {
+      console.error('Failed to apply project remediation:', err);
+      showToast(err instanceof Error ? err.message : 'Failed to apply remediation');
+    } finally {
+      setApplyingProjectRemediationId(null);
+    }
+  };
 
   const targetProjects = displayProjects.filter(
     (project) => project.id !== expandedProjectId && project.environment_type !== 'remote'
@@ -431,6 +584,33 @@ export function ProjectsView() {
 
   const clearProjectSelection = () => {
     setSelectedProjectAssetIds(new Set());
+  };
+
+  const projectTypeValue = (project: Project) => projectTypeDrafts[project.id] ?? project.project_type ?? '';
+
+  const handleProjectTypeChange = (projectId: string, value: string) => {
+    setProjectTypeDrafts((prev) => ({ ...prev, [projectId]: value }));
+  };
+
+  const handleProjectTypeSave = async (project: Project) => {
+    if (globalReadOnly) {
+      showToast(readOnlyReason || 'Read-only audit mode is enabled');
+      return;
+    }
+    const nextType = projectTypeValue(project).trim();
+    const currentType = (project.project_type ?? '').trim();
+    if (nextType === currentType) return;
+    setProjectTypeSavingId(project.id);
+    try {
+      await updateProject(project.id, { project_type: nextType || null });
+      await loadProjects();
+      showToast(nextType ? `Project type set to ${nextType}` : 'Project type cleared');
+    } catch (err) {
+      console.error('Failed to update project type:', err);
+      showToast('Failed to update project type');
+    } finally {
+      setProjectTypeSavingId(null);
+    }
   };
 
   const setSelectionEnabled = (enabled: boolean) => {
@@ -496,15 +676,18 @@ export function ProjectsView() {
     if (!batchRequests) return;
     setApplyingBatchSync(true);
     try {
-      const result = await applyBatchSync(batchRequests);
+      const result = await applyBatchSync(batchRequests, buildApproval(`Approved batch sync for ${batchRequests.length} project assets`));
       showToast(`Applied batch sync: ${result.successCount}/${result.total} assets`);
       setBatchPreview(null);
       setBatchRequests(null);
+      const latestDrift = await loadProjects();
       if (selectedExpandedProject) {
         const refreshed = await fetchProjectAssetsById(selectedExpandedProject.id);
-        setProjectAssets(refreshed.data);
+        setProjectAssets(refreshed.data.map((asset) => ({
+          ...asset,
+          drift: latestDrift[asset.id] || undefined,
+        })));
       }
-      await loadProjects();
     } catch (err) {
       console.error('Failed to apply batch sync:', err);
       showToast('Batch sync failed');
@@ -524,6 +707,12 @@ export function ProjectsView() {
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-xl font-bold text-text">Projects</h2>
         </div>
+
+        {globalReadOnly && (
+          <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+            Read-only audit mode is enabled. Project sync actions stay available for preview, but apply actions are disabled.
+          </div>
+        )}
 
         {/* Discover bar */}
         <div className="flex gap-2 mb-6">
@@ -561,31 +750,129 @@ export function ProjectsView() {
               const projectTopology = getProjectTopologyNode(topology, project.id);
               const assetCount = projectTopology?.summary?.assetCount ?? project.assetCount;
               const providerCount = projectTopology?.summary?.providerCount;
+              const policyItems = policySummaryItems(project.policy);
+              const remediations = projectRemediations[project.id] || [];
+              const loadingRemediations = projectRemediationLoading[project.id] || false;
               const summaryText = [
                 assetCount !== undefined ? `${assetCount} assets` : null,
                 providerCount ? `${providerCount} providers` : null,
+                ...policyItems,
               ].filter(Boolean).join(' · ');
               return (
                 <DroppableProjectCard
                   key={project.id}
                   project={project}
                   isExpanded={isExpanded}
-                  dropDisabled={isRemoteProject}
+                  dropDisabled={globalReadOnly || isRemoteProject}
                   onExpand={() => void handleExpand(project)}
                   summaryText={summaryText || null}
+                  git={project.git}
                 >
                   {/* Expanded: project assets */}
                   {isExpanded && (
                     <div className="mt-1 ml-4 border-l-2 border-accent/30 pl-4 py-2">
+                      <div className="mb-3 rounded-lg border border-border bg-surface/60 px-3 py-3">
+                        <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+                          <div className="flex-1">
+                            <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-muted">
+                              Project Type
+                            </label>
+                            <div className="flex gap-2">
+                              <input
+                                type="text"
+                                value={projectTypeValue(project)}
+                                onChange={(event) => handleProjectTypeChange(project.id, event.target.value)}
+                                placeholder="web-app, infra, research..."
+                                disabled={globalReadOnly}
+                                className="flex-1 rounded-lg border border-border bg-bg px-3 py-2 text-xs text-text placeholder:text-muted focus:outline-none focus:border-accent"
+                              />
+                              <button
+                                onClick={() => void handleProjectTypeSave(project)}
+                                disabled={globalReadOnly || projectTypeSavingId === project.id}
+                                className="rounded-lg border border-border px-3 py-2 text-xs font-medium text-muted transition-colors hover:text-text hover:border-accent/50 disabled:opacity-40"
+                              >
+                                {projectTypeSavingId === project.id ? 'Saving...' : 'Save'}
+                              </button>
+                            </div>
+                          </div>
+                          {project.policy && (
+                            <div className={`rounded-lg border px-3 py-2 text-xs ${
+                              project.policy.status === 'broken'
+                                ? 'border-red/30 bg-red/10 text-red'
+                                : project.policy.violationCount > 0
+                                  ? 'border-amber-400/30 bg-amber-400/10 text-amber-200'
+                                  : 'border-emerald-400/20 bg-emerald-400/10 text-emerald-200'
+                            }`}>
+                              <div className="font-medium">Policy</div>
+                              <div className="mt-0.5 text-[11px]">{project.policy.summary}</div>
+                            </div>
+                          )}
+                        </div>
+                        {project.policy && project.policy.violations.length > 0 && (
+                          <div className="mt-3 space-y-1">
+                            {project.policy.violations.slice(0, 3).map((violation) => (
+                              <div key={violation.id} className="rounded-md border border-border/70 bg-bg/60 px-2.5 py-2 text-[11px] text-muted">
+                                <span className="font-medium text-text">{violation.policyName}</span>
+                                <span className="mx-1 text-muted">·</span>
+                                {violation.message}
+                              </div>
+                            ))}
+                            {project.policy.violations.length > 3 && (
+                              <div className="text-[11px] text-muted">+{project.policy.violations.length - 3} more policy issues</div>
+                            )}
+                          </div>
+                        )}
+                        {(loadingRemediations || remediations.length > 0) && (
+                          <div className="mt-3 rounded-lg border border-border bg-bg/60 px-3 py-3">
+                            <div className="text-[11px] font-semibold uppercase tracking-wider text-muted">
+                              Suggested Fixes
+                            </div>
+                            {loadingRemediations ? (
+                              <div className="mt-2 text-[11px] text-muted">Checking available remediations…</div>
+                            ) : (
+                              <div className="mt-2 space-y-2">
+                                {remediations.map((suggestion) => (
+                                  <div key={suggestion.id} className="rounded-md border border-border/70 bg-bg/70 px-2.5 py-2">
+                                    <div className="flex items-start justify-between gap-3">
+                                      <div className="min-w-0">
+                                        <div className="text-xs font-medium text-text">{suggestion.title}</div>
+                                        <div className="mt-0.5 text-[11px] text-muted">{suggestion.summary}</div>
+                                      </div>
+                                      {suggestion.canApply ? (
+                                        <button
+                                          onClick={() => void handleApplyProjectRemediation(project, suggestion)}
+                                          disabled={globalReadOnly || applyingProjectRemediationId === suggestion.id}
+                                          className="rounded-lg border border-border px-2.5 py-1 text-[11px] font-medium text-text transition-colors hover:border-accent/50 hover:text-accent disabled:opacity-40"
+                                        >
+                                          {applyingProjectRemediationId === suggestion.id ? 'Applying…' : suggestion.applyLabel || 'Apply'}
+                                        </button>
+                                      ) : (
+                                        <span className="rounded-full bg-[hsl(240,5%,16%)] px-2 py-0.5 text-[10px] uppercase tracking-wider text-muted">
+                                          guided
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
                       {isRemoteProject && (
                         <div className="mb-3 rounded-lg border border-sky-400/20 bg-sky-400/10 px-3 py-2 text-xs text-sky-200">
                           Remote project detected. Viewing assets is available; project-to-project sync actions stay disabled until remote project sync is implemented.
                         </div>
                       )}
+                      {project.git && (
+                        <div className={`mb-3 rounded-lg border px-3 py-2 text-xs ${project.git.conflictedCount > 0 ? 'border-red/30 bg-red/10 text-red' : project.git.dirty ? 'border-orange/30 bg-orange/10 text-orange' : 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300'}`}>
+                          Git: {project.git.summary}
+                        </div>
+                      )}
                       <div className="mb-3 flex flex-wrap items-center gap-2">
                         <button
                           onClick={() => setSelectionEnabled(!selectionMode)}
-                          disabled={isRemoteProject}
+                          disabled={globalReadOnly || isRemoteProject}
                           className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
                             selectionMode
                               ? 'border-accent/25 bg-accent/10 text-accent'
@@ -645,14 +932,14 @@ export function ProjectsView() {
                             </select>
                             <button
                               onClick={() => void previewBatchMove('symlink')}
-                              disabled={selectedProjectAssets.length === 0 || !batchTargetProjectPath}
+                              disabled={globalReadOnly || selectedProjectAssets.length === 0 || !batchTargetProjectPath}
                               className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted hover:text-text hover:border-accent/50 transition-colors disabled:opacity-40"
                             >
                               Link Selected
                             </button>
                             <button
                               onClick={() => void previewBatchMove('copy')}
-                              disabled={selectedProjectAssets.length === 0 || !batchTargetProjectPath}
+                              disabled={globalReadOnly || selectedProjectAssets.length === 0 || !batchTargetProjectPath}
                               className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted hover:text-text hover:border-accent/50 transition-colors disabled:opacity-40"
                             >
                               Copy Selected
@@ -674,12 +961,13 @@ export function ProjectsView() {
                             <div className="space-y-1">
                               {items.map((asset) => (
                                 <DraggableAssetRow
-                                  key={`${asset.type}-${asset.name}`}
+                                  key={asset.id}
                                   asset={asset}
-                                  dragDisabled={isRemoteProject}
+                                  dragDisabled={globalReadOnly || isRemoteProject}
                                   selectionMode={selectionMode}
                                   selected={selectedProjectAssetIds.has(asset.id)}
                                   onToggleSelection={toggleProjectAssetSelection}
+                                  driftSummary={asset.drift?.summary ?? null}
                                 />
                               ))}
                             </div>
@@ -725,6 +1013,7 @@ export function ProjectsView() {
             <div className="space-y-2">
               <button
                 onClick={() => executeMoveAsset('symlink')}
+                disabled={globalReadOnly}
                 className="w-full text-left px-4 py-3 rounded-lg border border-border hover:border-accent/50 transition-colors"
               >
                 <div className="text-sm font-medium text-text">🔗 Symlink (shared)</div>
@@ -732,6 +1021,7 @@ export function ProjectsView() {
               </button>
               <button
                 onClick={() => executeMoveAsset('copy')}
+                disabled={globalReadOnly}
                 className="w-full text-left px-4 py-3 rounded-lg border border-border hover:border-accent/50 transition-colors"
               >
                 <div className="text-sm font-medium text-text">📋 Copy (independent)</div>
@@ -760,6 +1050,8 @@ export function ProjectsView() {
           plan={syncPlan}
           applying={applyingSync || syncLoading}
           title={syncLoading ? 'Building sync preview...' : syncTitle}
+          readOnly={globalReadOnly}
+          readOnlyReason={readOnlyReason}
           onApply={handleApplySync}
           onClose={() => {
             if (applyingSync || syncLoading) return;
@@ -775,6 +1067,8 @@ export function ProjectsView() {
           loading={batchLoading}
           applying={applyingBatchSync}
           title={batchLoading ? 'Building batch sync preview...' : batchTitle}
+          readOnly={globalReadOnly}
+          readOnlyReason={readOnlyReason}
           onApply={applyPendingBatchSync}
           onClose={() => {
             if (batchLoading || applyingBatchSync) return;

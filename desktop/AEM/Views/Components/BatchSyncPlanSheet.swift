@@ -4,6 +4,8 @@ struct BatchSyncPlanSheet: View {
     let title: String
     let preview: BatchSyncPreview
     let isApplying: Bool
+    let readOnly: Bool
+    let readOnlyReason: String?
     let onApply: () -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -20,7 +22,7 @@ struct BatchSyncPlanSheet: View {
     }
 
     private var canApply: Bool {
-        preview.readyCount > 0 && preview.hasChangesCount > 0 && blockingCount == 0
+        !readOnly && preview.readyCount > 0 && preview.hasChangesCount > 0 && blockingCount == 0
     }
 
     var body: some View {
@@ -39,6 +41,15 @@ struct BatchSyncPlanSheet: View {
                     summaryPill("Blocked", value: preview.blockedCount, tint: .red)
                     summaryPill("With Changes", value: preview.hasChangesCount, tint: .accentColor)
                     summaryPill("Operations", value: preview.operationCount, tint: .orange)
+                }
+
+                if readOnly {
+                    Text(readOnlyReason ?? "Read-only audit mode is enabled. Applying batch sync is disabled.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
                 }
 
                 ScrollView {
@@ -61,6 +72,23 @@ struct BatchSyncPlanSheet: View {
 
                                 if let error = result.error, !result.ok {
                                     issueRow(level: "blocking", message: error)
+                                }
+
+                                if let git = result.plan?.target?.git {
+                                    HStack(alignment: .top, spacing: 8) {
+                                        Image(systemName: git.conflictedCount > 0 ? "exclamationmark.triangle.fill" : "arrow.triangle.branch")
+                                            .foregroundStyle(git.conflictedCount > 0 ? .red : (git.dirty ? .orange : .green))
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text("Git Target")
+                                                .font(.caption.weight(.semibold))
+                                            Text(git.summary)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    .padding(10)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background((git.conflictedCount > 0 ? Color.red : (git.dirty ? Color.orange : Color.green)).opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
                                 }
 
                                 ForEach(result.plan?.issues ?? []) { issue in

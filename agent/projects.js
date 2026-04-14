@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const store = require('./store');
 const { evaluateAssetHealth } = require('./health');
 const { attachCapabilities } = require('./capabilities');
+const { inspectGitContext } = require('./git');
 
 const HOME = process.env.HOME || process.env.USERPROFILE || '';
 
@@ -69,11 +70,14 @@ function scanProjectAssets(projectPath, options = {}) {
   const projectName = path.basename(projectPath);
   const environmentId = options.environmentId || 'local';
   const environmentType = options.environmentType || 'local';
+  const gitCache = options.gitCache || new Map();
+  const projectGit = environmentType === 'local' ? inspectGitContext(projectPath, null, gitCache) : null;
   const pushAsset = (asset) => {
     const normalized = {
       id: stableProjectAssetId(projectPath, asset.type, asset.name, asset.filePath || '', environmentId),
       environment_id: environmentId,
       environment_type: environmentType,
+      git: environmentType === 'local' ? inspectGitContext(asset.filePath || projectPath, asset.filePath || null, gitCache) || projectGit : null,
       ...asset,
     };
     assets.push(attachCapabilities({
@@ -238,6 +242,7 @@ function scanProjectAssets(projectPath, options = {}) {
 function discoverProjects(searchDirs) {
   const projects = [];
   const seen = new Set();
+  const gitCache = new Map();
 
   for (let dir of searchDirs) {
     // Resolve ~ to home directory
@@ -264,7 +269,7 @@ function discoverProjects(searchDirs) {
       if (hasMarker) {
         seen.add(projectPath);
         const providers = detectProjectProviders(projectPath);
-        const assets = scanProjectAssets(projectPath);
+        const assets = scanProjectAssets(projectPath, { gitCache });
 
         projects.push({
           path: projectPath,
@@ -272,6 +277,7 @@ function discoverProjects(searchDirs) {
           providers,
           assetCount: assets.length,
           assets,
+          git: inspectGitContext(projectPath, null, gitCache),
         });
       }
     }
@@ -287,7 +293,8 @@ function addProjectByPath(projectPath) {
   if (!fs.existsSync(projectPath)) return null;
 
   const providers = detectProjectProviders(projectPath);
-  const assets = scanProjectAssets(projectPath);
+  const gitCache = new Map();
+  const assets = scanProjectAssets(projectPath, { gitCache });
 
   return {
     path: projectPath,
@@ -295,6 +302,7 @@ function addProjectByPath(projectPath) {
     providers,
     assetCount: assets.length,
     assets,
+    git: inspectGitContext(projectPath, null, gitCache),
   };
 }
 

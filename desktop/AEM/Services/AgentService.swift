@@ -233,7 +233,7 @@ final class AgentService: @unchecked Sendable {
 
     private func findCLI() -> String? {
         // 1. Bundled in app resources
-        if let bundled = Bundle.main.path(forResource: "bin/cli", ofType: "js") {
+        if let bundled = Foundation.Bundle.main.path(forResource: "bin/cli", ofType: "js") {
             return bundled
         }
 
@@ -251,8 +251,8 @@ final class AgentService: @unchecked Sendable {
         // 3. Relative to app bundle (when built inside desktop/)
         let devPaths = [
             FileManager.default.currentDirectoryPath + "/../bin/cli.js",
-            Bundle.main.bundlePath + "/../../../../bin/cli.js",
-            Bundle.main.bundlePath + "/../../../../../bin/cli.js",
+            Foundation.Bundle.main.bundlePath + "/../../../../bin/cli.js",
+            Foundation.Bundle.main.bundlePath + "/../../../../../bin/cli.js",
         ]
         for path in devPaths {
             let resolved = (path as NSString).standardizingPath

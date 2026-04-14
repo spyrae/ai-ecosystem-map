@@ -68,6 +68,7 @@ function initStore() {
       ssh_port INTEGER DEFAULT 22,
       ssh_user TEXT,
       ssh_key_path TEXT,
+      read_only INTEGER DEFAULT 0,
       is_active INTEGER DEFAULT 1,
       created_at INTEGER DEFAULT (unixepoch()),
       updated_at INTEGER DEFAULT (unixepoch())
@@ -78,6 +79,7 @@ function initStore() {
       name TEXT NOT NULL,
       path TEXT NOT NULL UNIQUE,
       environment_id TEXT REFERENCES environments(id),
+      project_type TEXT,
       last_scanned_at INTEGER,
       created_at INTEGER DEFAULT (unixepoch())
     );
@@ -142,13 +144,84 @@ function initStore() {
       created_at INTEGER DEFAULT (unixepoch())
     );
 
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT,
+      updated_at INTEGER DEFAULT (unixepoch())
+    );
+
+    CREATE TABLE IF NOT EXISTS asset_source_truth (
+      group_key TEXT PRIMARY KEY,
+      asset_id TEXT NOT NULL,
+      updated_at INTEGER DEFAULT (unixepoch())
+    );
+
+    CREATE TABLE IF NOT EXISTS bundles (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      description TEXT,
+      current_version INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER DEFAULT (unixepoch()),
+      updated_at INTEGER DEFAULT (unixepoch())
+    );
+
+    CREATE TABLE IF NOT EXISTS bundle_versions (
+      id TEXT PRIMARY KEY,
+      bundle_id TEXT NOT NULL REFERENCES bundles(id) ON DELETE CASCADE,
+      version INTEGER NOT NULL,
+      label TEXT,
+      description TEXT,
+      items_json TEXT NOT NULL,
+      created_at INTEGER DEFAULT (unixepoch()),
+      UNIQUE(bundle_id, version)
+    );
+
+    CREATE TABLE IF NOT EXISTS bundle_applications (
+      id TEXT PRIMARY KEY,
+      bundle_id TEXT NOT NULL REFERENCES bundles(id) ON DELETE CASCADE,
+      target_kind TEXT NOT NULL,
+      target_ref TEXT NOT NULL,
+      target_label TEXT NOT NULL,
+      target_meta TEXT,
+      bundle_version INTEGER NOT NULL,
+      applied_at INTEGER DEFAULT (unixepoch()),
+      last_status TEXT,
+      last_summary TEXT,
+      UNIQUE(bundle_id, target_kind, target_ref)
+    );
+
+    CREATE TABLE IF NOT EXISTS policies (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      description TEXT,
+      enabled INTEGER DEFAULT 1,
+      severity TEXT NOT NULL DEFAULT 'warning',
+      selectors_json TEXT NOT NULL,
+      rules_json TEXT NOT NULL,
+      created_at INTEGER DEFAULT (unixepoch()),
+      updated_at INTEGER DEFAULT (unixepoch())
+    );
+
     CREATE INDEX IF NOT EXISTS idx_assets_type ON assets(type);
     CREATE INDEX IF NOT EXISTS idx_assets_category ON assets(category);
     CREATE INDEX IF NOT EXISTS idx_assets_env ON assets(environment_id);
     CREATE INDEX IF NOT EXISTS idx_connections_asset ON connections(asset_id);
     CREATE INDEX IF NOT EXISTS idx_history_asset ON history(asset_id);
     CREATE INDEX IF NOT EXISTS idx_snapshots_created_at ON snapshots(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_asset_source_truth_asset_id ON asset_source_truth(asset_id);
+    CREATE INDEX IF NOT EXISTS idx_bundle_versions_bundle_id ON bundle_versions(bundle_id, version DESC);
+    CREATE INDEX IF NOT EXISTS idx_bundle_applications_bundle_id ON bundle_applications(bundle_id, applied_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_policies_enabled ON policies(enabled, name);
   `);
+
+  const environmentColumns = db.prepare(`PRAGMA table_info(environments)`).all().map((row) => row.name);
+  if (!environmentColumns.includes('read_only')) {
+    db.exec('ALTER TABLE environments ADD COLUMN read_only INTEGER DEFAULT 0');
+  }
+  const projectColumns = db.prepare(`PRAGMA table_info(projects)`).all().map((row) => row.name);
+  if (!projectColumns.includes('project_type')) {
+    db.exec('ALTER TABLE projects ADD COLUMN project_type TEXT');
+  }
 
   // Ensure local environment exists
   const localEnv = db.prepare('SELECT id FROM environments WHERE type = ?').get('local');
@@ -157,6 +230,11 @@ function initStore() {
     db.prepare('INSERT INTO environments (id, name, type) VALUES (?, ?, ?)').run(
       genId(), os.hostname(), 'local'
     );
+  }
+
+  const auditModeSetting = db.prepare('SELECT key FROM settings WHERE key = ?').get('global_read_only');
+  if (!auditModeSetting) {
+    db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('global_read_only', '0');
   }
 
   return db;
@@ -173,17 +251,26 @@ function genId() {
 function createInMemoryFallback() {
   const mem = {
     assets: [],
-    environments: [{ id: 'local-fallback', name: require('os').hostname(), type: 'local' }],
+    environments: [{ id: 'local-fallback', name: require('os').hostname(), type: 'local', read_only: 0 }],
     projects: [],
     history: [],
     snapshots: [],
     runningAgents: [],
+    bundles: [],
+    bundleVersions: [],
+    bundleApplications: [],
+    policies: [],
+    sourceTruth: {},
+    settings: {
+      global_read_only: '0',
+    },
   };
   return mem;
 }
 
 /** Check if running in fallback mode */
 function isFallback() {
+  if (!db) initStore();
   return db && db === _fallbackStore;
 }
 
@@ -407,15 +494,79 @@ function getEnvironments() {
 function addEnvironment(env) {
   if (isFallback()) {
     const id = genId();
-    _fallbackStore.environments.push({ id, name: env.name, type: env.type || 'remote', ...env });
+    _fallbackStore.environments.push({ id, name: env.name, type: env.type || 'remote', read_only: 0, ...env });
     return id;
   }
   const d = getDb();
   const id = genId();
-  d.prepare('INSERT INTO environments (id, name, type, ssh_host, ssh_port, ssh_user, ssh_key_path) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
-    id, env.name, env.type || 'remote', env.ssh_host, env.ssh_port || 22, env.ssh_user, env.ssh_key_path
+  d.prepare('INSERT INTO environments (id, name, type, ssh_host, ssh_port, ssh_user, ssh_key_path, read_only) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
+    id, env.name, env.type || 'remote', env.ssh_host, env.ssh_port || 22, env.ssh_user, env.ssh_key_path, env.read_only ? 1 : 0
   );
   return id;
+}
+
+function setEnvironmentReadOnly(environmentId, readOnly) {
+  if (!environmentId) return false;
+
+  if (isFallback()) {
+    const environment = _fallbackStore.environments.find((entry) => entry.id === environmentId);
+    if (!environment) return false;
+    environment.read_only = readOnly ? 1 : 0;
+    return true;
+  }
+
+  const info = getDb().prepare('UPDATE environments SET read_only = ?, updated_at = unixepoch() WHERE id = ?').run(
+    readOnly ? 1 : 0,
+    environmentId
+  );
+  return info.changes > 0;
+}
+
+function getSetting(key) {
+  if (!key) return null;
+
+  if (isFallback()) {
+    return _fallbackStore.settings[key] ?? null;
+  }
+
+  const row = getDb().prepare('SELECT value FROM settings WHERE key = ?').get(key);
+  return row?.value ?? null;
+}
+
+function setSetting(key, value) {
+  if (!key) return false;
+
+  if (isFallback()) {
+    _fallbackStore.settings[key] = value;
+    return true;
+  }
+
+  getDb().prepare(`
+    INSERT INTO settings (key, value, updated_at)
+    VALUES (?, ?, unixepoch())
+    ON CONFLICT(key) DO UPDATE SET
+      value = excluded.value,
+      updated_at = unixepoch()
+  `).run(key, value);
+  return true;
+}
+
+function getAuditMode() {
+  const environments = getEnvironments();
+  return {
+    global_read_only: getSetting('global_read_only') === '1',
+    environments: environments.map((environment) => ({
+      environment_id: environment.id,
+      name: environment.name,
+      type: environment.type,
+      read_only: Number(environment.read_only || 0) === 1,
+      ssh_host: environment.ssh_host || null,
+    })),
+  };
+}
+
+function setGlobalReadOnly(readOnly) {
+  return setSetting('global_read_only', readOnly ? '1' : '0');
 }
 
 // ─── Projects ─────────────────────────────────────────
@@ -426,6 +577,7 @@ function enrichFallbackProject(project) {
     ...project,
     environment_name: env?.name || null,
     environment_type: env?.type || null,
+    project_type: project.project_type || null,
   };
 }
 
@@ -477,7 +629,7 @@ function addProject(name, projectPath, environmentId) {
     if (existing) return existing.id;
 
     const id = genId();
-    _fallbackStore.projects.push({ id, name, path: projectPath, environment_id: envId });
+    _fallbackStore.projects.push({ id, name, path: projectPath, environment_id: envId, project_type: null });
     return id;
   }
 
@@ -497,24 +649,597 @@ function addProject(name, projectPath, environmentId) {
   return id;
 }
 
+function setProjectType(projectId, projectType) {
+  const normalized = typeof projectType === 'string' && projectType.trim() ? projectType.trim() : null;
+  if (!projectId) return null;
+
+  if (isFallback()) {
+    const project = _fallbackStore.projects.find((entry) => entry.id === projectId);
+    if (!project) return null;
+    project.project_type = normalized;
+    return enrichFallbackProject(project);
+  }
+
+  const info = getDb().prepare('UPDATE projects SET project_type = ? WHERE id = ?').run(normalized, projectId);
+  if (!info.changes) return null;
+  return getProjectById(projectId);
+}
+
+function getSourceOfTruthMap() {
+  if (isFallback()) {
+    return { ..._fallbackStore.sourceTruth };
+  }
+
+  const rows = getDb().prepare('SELECT group_key, asset_id FROM asset_source_truth').all();
+  return Object.fromEntries(rows.map((row) => [row.group_key, row.asset_id]));
+}
+
+function getSourceOfTruth(groupKey) {
+  if (!groupKey) return null;
+
+  if (isFallback()) {
+    return _fallbackStore.sourceTruth[groupKey] || null;
+  }
+
+  const row = getDb().prepare('SELECT asset_id FROM asset_source_truth WHERE group_key = ?').get(groupKey);
+  return row?.asset_id || null;
+}
+
+function setSourceOfTruth(groupKey, assetId) {
+  if (!groupKey || !assetId) return false;
+
+  if (isFallback()) {
+    _fallbackStore.sourceTruth[groupKey] = assetId;
+    return true;
+  }
+
+  getDb().prepare(`
+    INSERT INTO asset_source_truth (group_key, asset_id, updated_at)
+    VALUES (?, ?, unixepoch())
+    ON CONFLICT(group_key) DO UPDATE SET
+      asset_id = excluded.asset_id,
+      updated_at = unixepoch()
+  `).run(groupKey, assetId);
+  return true;
+}
+
+function clearSourceOfTruth(groupKey) {
+  if (!groupKey) return;
+
+  if (isFallback()) {
+    delete _fallbackStore.sourceTruth[groupKey];
+    return;
+  }
+
+  getDb().prepare('DELETE FROM asset_source_truth WHERE group_key = ?').run(groupKey);
+}
+
+// ─── Bundles ──────────────────────────────────────────
+
+function normalizeBundleItem(item) {
+  if (!item || !item.name || !item.type) return null;
+  return {
+    assetId: item.assetId || null,
+    name: String(item.name),
+    type: String(item.type),
+    filePath: item.filePath || null,
+    providers: Array.isArray(item.providers) ? [...new Set(item.providers.filter(Boolean))] : [],
+    projectPath: item.projectPath || null,
+    scope: item.scope || null,
+  };
+}
+
+function normalizeBundleItems(items) {
+  return (Array.isArray(items) ? items : [])
+    .map(normalizeBundleItem)
+    .filter(Boolean)
+    .sort((left, right) => {
+      const leftKey = `${left.type}:${left.name}`;
+      const rightKey = `${right.type}:${right.name}`;
+      return leftKey.localeCompare(rightKey);
+    });
+}
+
+function parseBundleItems(raw) {
+  try {
+    return normalizeBundleItems(raw ? JSON.parse(raw) : []);
+  } catch {
+    return [];
+  }
+}
+
+function parseBundleMeta(raw) {
+  try {
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function getBundleVersionRows(bundleId) {
+  if (isFallback()) {
+    return _fallbackStore.bundleVersions
+      .filter((row) => row.bundle_id === bundleId)
+      .sort((left, right) => right.version - left.version);
+  }
+
+  return getDb()
+    .prepare('SELECT * FROM bundle_versions WHERE bundle_id = ? ORDER BY version DESC')
+    .all(bundleId);
+}
+
+function getBundleApplicationRows(bundleId) {
+  if (isFallback()) {
+    return _fallbackStore.bundleApplications
+      .filter((row) => row.bundle_id === bundleId)
+      .sort((left, right) => (right.applied_at || 0) - (left.applied_at || 0));
+  }
+
+  return getDb()
+    .prepare('SELECT * FROM bundle_applications WHERE bundle_id = ? ORDER BY applied_at DESC')
+    .all(bundleId);
+}
+
+function getBundleCurrentVersionRow(bundleId, currentVersion) {
+  const versions = getBundleVersionRows(bundleId);
+  return versions.find((row) => row.version === currentVersion) || versions[0] || null;
+}
+
+function getBundleApplications(bundleId) {
+  return getBundleApplicationRows(bundleId).map((row) => ({
+    id: row.id,
+    target_kind: row.target_kind,
+    target_ref: row.target_ref,
+    target_label: row.target_label,
+    target_meta: parseBundleMeta(row.target_meta),
+    bundle_version: row.bundle_version,
+    applied_at: row.applied_at,
+    last_status: row.last_status || 'unknown',
+    last_summary: row.last_summary || '',
+    outdated: false,
+  }));
+}
+
+function enrichBundle(bundle) {
+  if (!bundle) return null;
+  const currentVersionRow = getBundleCurrentVersionRow(bundle.id, bundle.current_version);
+  const versions = getBundleVersionRows(bundle.id).map((row) => ({
+    id: row.id,
+    version: row.version,
+    label: row.label || '',
+    description: row.description || '',
+    items: parseBundleItems(row.items_json),
+    itemCount: parseBundleItems(row.items_json).length,
+    created_at: row.created_at,
+  }));
+  const applications = getBundleApplications(bundle.id).map((application) => ({
+    ...application,
+    outdated: application.bundle_version < bundle.current_version,
+  }));
+
+  return {
+    ...bundle,
+    description: bundle.description || '',
+    current_version: bundle.current_version,
+    items: currentVersionRow ? parseBundleItems(currentVersionRow.items_json) : [],
+    itemCount: currentVersionRow ? parseBundleItems(currentVersionRow.items_json).length : 0,
+    versions,
+    applications,
+    applicationCount: applications.length,
+    outdatedApplicationCount: applications.filter((application) => application.outdated).length,
+    lastAppliedAt: applications[0]?.applied_at || null,
+  };
+}
+
+function getBundles() {
+  if (isFallback()) {
+    return _fallbackStore.bundles
+      .slice()
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .map(enrichBundle);
+  }
+
+  return getDb()
+    .prepare('SELECT * FROM bundles ORDER BY name')
+    .all()
+    .map(enrichBundle);
+}
+
+function getBundleById(bundleId) {
+  if (!bundleId) return null;
+
+  if (isFallback()) {
+    const row = _fallbackStore.bundles.find((entry) => entry.id === bundleId);
+    return row ? enrichBundle(row) : null;
+  }
+
+  const row = getDb().prepare('SELECT * FROM bundles WHERE id = ?').get(bundleId);
+  return row ? enrichBundle(row) : null;
+}
+
+function parseJsonValue(raw, fallback) {
+  if (!raw) return fallback;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizePolicyRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    description: row.description || '',
+    enabled: Number(row.enabled || 0) === 1,
+    selectors: parseJsonValue(row.selectors_json, {}),
+    rules: parseJsonValue(row.rules_json, []),
+  };
+}
+
+function getPolicies() {
+  if (isFallback()) {
+    return _fallbackStore.policies
+      .slice()
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .map(normalizePolicyRow);
+  }
+
+  return getDb()
+    .prepare('SELECT * FROM policies ORDER BY enabled DESC, name')
+    .all()
+    .map(normalizePolicyRow);
+}
+
+function getPolicyById(policyId) {
+  if (!policyId) return null;
+
+  if (isFallback()) {
+    const row = _fallbackStore.policies.find((entry) => entry.id === policyId);
+    return row ? normalizePolicyRow(row) : null;
+  }
+
+  const row = getDb().prepare('SELECT * FROM policies WHERE id = ?').get(policyId);
+  return row ? normalizePolicyRow(row) : null;
+}
+
+function createPolicy({ name, description = '', enabled = true, severity = 'warning', selectors = {}, rules = [] }) {
+  if (!name) throw new Error('Policy name is required');
+
+  const payload = {
+    id: genId(),
+    name: String(name).trim(),
+    description: String(description || '').trim(),
+    enabled: enabled ? 1 : 0,
+    severity,
+    selectors_json: JSON.stringify(selectors || {}),
+    rules_json: JSON.stringify(rules || []),
+    created_at: Date.now(),
+    updated_at: Date.now(),
+  };
+
+  if (isFallback()) {
+    if (_fallbackStore.policies.some((entry) => entry.name.toLowerCase() === payload.name.toLowerCase())) {
+      throw new Error('Policy name already exists');
+    }
+    _fallbackStore.policies.push(payload);
+    return getPolicyById(payload.id);
+  }
+
+  const d = getDb();
+  const existing = d.prepare('SELECT id FROM policies WHERE lower(name) = lower(?)').get(payload.name);
+  if (existing?.id) throw new Error('Policy name already exists');
+
+  d.prepare(`
+    INSERT INTO policies (id, name, description, enabled, severity, selectors_json, rules_json, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())
+  `).run(
+    payload.id,
+    payload.name,
+    payload.description,
+    payload.enabled,
+    payload.severity,
+    payload.selectors_json,
+    payload.rules_json
+  );
+
+  return getPolicyById(payload.id);
+}
+
+function updatePolicy(policyId, { name, description, enabled, severity, selectors, rules }) {
+  const current = getPolicyById(policyId);
+  if (!current) throw new Error('Policy not found');
+
+  const nextName = typeof name === 'string' ? name.trim() : current.name;
+  const nextDescription = typeof description === 'string' ? description.trim() : current.description;
+  const nextEnabled = typeof enabled === 'boolean' ? enabled : current.enabled;
+  const nextSeverity = typeof severity === 'string' ? severity : current.severity;
+  const nextSelectors = selectors !== undefined ? selectors : current.selectors;
+  const nextRules = rules !== undefined ? rules : current.rules;
+
+  if (isFallback()) {
+    const duplicate = _fallbackStore.policies.find((entry) => entry.id !== policyId && entry.name.toLowerCase() === nextName.toLowerCase());
+    if (duplicate) throw new Error('Policy name already exists');
+    const row = _fallbackStore.policies.find((entry) => entry.id === policyId);
+    if (!row) throw new Error('Policy not found');
+    row.name = nextName;
+    row.description = nextDescription;
+    row.enabled = nextEnabled ? 1 : 0;
+    row.severity = nextSeverity;
+    row.selectors_json = JSON.stringify(nextSelectors || {});
+    row.rules_json = JSON.stringify(nextRules || []);
+    row.updated_at = Date.now();
+    return getPolicyById(policyId);
+  }
+
+  const d = getDb();
+  const duplicate = d.prepare('SELECT id FROM policies WHERE id != ? AND lower(name) = lower(?)').get(policyId, nextName);
+  if (duplicate?.id) throw new Error('Policy name already exists');
+
+  d.prepare(`
+    UPDATE policies
+    SET name = ?, description = ?, enabled = ?, severity = ?, selectors_json = ?, rules_json = ?, updated_at = unixepoch()
+    WHERE id = ?
+  `).run(
+    nextName,
+    nextDescription,
+    nextEnabled ? 1 : 0,
+    nextSeverity,
+    JSON.stringify(nextSelectors || {}),
+    JSON.stringify(nextRules || []),
+    policyId
+  );
+
+  return getPolicyById(policyId);
+}
+
+function deletePolicy(policyId) {
+  if (!policyId) return false;
+
+  if (isFallback()) {
+    const previousLength = _fallbackStore.policies.length;
+    _fallbackStore.policies = _fallbackStore.policies.filter((entry) => entry.id !== policyId);
+    return previousLength !== _fallbackStore.policies.length;
+  }
+
+  const info = getDb().prepare('DELETE FROM policies WHERE id = ?').run(policyId);
+  return info.changes > 0;
+}
+
+function insertBundleVersion({ bundleId, version, label, description, items }) {
+  const payload = {
+    id: genId(),
+    bundle_id: bundleId,
+    version,
+    label: label || '',
+    description: description || '',
+    items_json: JSON.stringify(normalizeBundleItems(items)),
+    created_at: Date.now(),
+  };
+
+  if (isFallback()) {
+    _fallbackStore.bundleVersions.push(payload);
+    return payload.id;
+  }
+
+  getDb().prepare(`
+    INSERT INTO bundle_versions (id, bundle_id, version, label, description, items_json)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(payload.id, payload.bundle_id, payload.version, payload.label, payload.description, payload.items_json);
+  return payload.id;
+}
+
+function createBundle({ name, description = '', items = [], versionLabel = '' }) {
+  if (!name) throw new Error('Bundle name is required');
+
+  const normalizedItems = normalizeBundleItems(items);
+  const payload = {
+    id: genId(),
+    name: String(name).trim(),
+    description: String(description || '').trim(),
+    current_version: 1,
+    created_at: Date.now(),
+    updated_at: Date.now(),
+  };
+
+  if (isFallback()) {
+    if (_fallbackStore.bundles.some((entry) => entry.name.toLowerCase() === payload.name.toLowerCase())) {
+      throw new Error('Bundle name already exists');
+    }
+    _fallbackStore.bundles.push(payload);
+    insertBundleVersion({
+      bundleId: payload.id,
+      version: 1,
+      label: versionLabel,
+      description: payload.description,
+      items: normalizedItems,
+    });
+    return getBundleById(payload.id);
+  }
+
+  const d = getDb();
+  const existing = d.prepare('SELECT id FROM bundles WHERE lower(name) = lower(?)').get(payload.name);
+  if (existing?.id) {
+    throw new Error('Bundle name already exists');
+  }
+
+  d.prepare(`
+    INSERT INTO bundles (id, name, description, current_version, created_at, updated_at)
+    VALUES (?, ?, ?, ?, unixepoch(), unixepoch())
+  `).run(payload.id, payload.name, payload.description, payload.current_version);
+
+  insertBundleVersion({
+    bundleId: payload.id,
+    version: 1,
+    label: versionLabel,
+    description: payload.description,
+    items: normalizedItems,
+  });
+
+  return getBundleById(payload.id);
+}
+
+function updateBundle(bundleId, { name, description, items, versionLabel = '' }) {
+  const current = getBundleById(bundleId);
+  if (!current) throw new Error('Bundle not found');
+
+  const nextName = typeof name === 'string' ? name.trim() : current.name;
+  const nextDescription = typeof description === 'string' ? description.trim() : current.description;
+  const hasItemsUpdate = Array.isArray(items);
+  const nextItems = hasItemsUpdate ? normalizeBundleItems(items) : current.items;
+  const itemsChanged = JSON.stringify(nextItems) !== JSON.stringify(current.items);
+  const descriptionChanged = nextDescription !== current.description;
+  const nameChanged = nextName !== current.name;
+
+  if (isFallback()) {
+    const duplicate = _fallbackStore.bundles.find((entry) => entry.id !== bundleId && entry.name.toLowerCase() === nextName.toLowerCase());
+    if (duplicate) throw new Error('Bundle name already exists');
+
+    const row = _fallbackStore.bundles.find((entry) => entry.id === bundleId);
+    if (!row) throw new Error('Bundle not found');
+    row.name = nextName;
+    row.description = nextDescription;
+    row.updated_at = Date.now();
+    if (itemsChanged || descriptionChanged) {
+      row.current_version += 1;
+      insertBundleVersion({
+        bundleId,
+        version: row.current_version,
+        label: versionLabel,
+        description: nextDescription,
+        items: nextItems,
+      });
+    }
+    return getBundleById(bundleId);
+  }
+
+  const d = getDb();
+  const duplicate = d.prepare('SELECT id FROM bundles WHERE id != ? AND lower(name) = lower(?)').get(bundleId, nextName);
+  if (duplicate?.id) throw new Error('Bundle name already exists');
+
+  let currentVersion = current.current_version;
+  if (itemsChanged || descriptionChanged) {
+    currentVersion += 1;
+    insertBundleVersion({
+      bundleId,
+      version: currentVersion,
+      label: versionLabel,
+      description: nextDescription,
+      items: nextItems,
+    });
+  }
+
+  if (nameChanged || descriptionChanged || itemsChanged) {
+    d.prepare(`
+      UPDATE bundles
+      SET name = ?, description = ?, current_version = ?, updated_at = unixepoch()
+      WHERE id = ?
+    `).run(nextName, nextDescription, currentVersion, bundleId);
+  }
+
+  return getBundleById(bundleId);
+}
+
+function deleteBundle(bundleId) {
+  if (!bundleId) return false;
+
+  if (isFallback()) {
+    const previousLength = _fallbackStore.bundles.length;
+    _fallbackStore.bundles = _fallbackStore.bundles.filter((entry) => entry.id !== bundleId);
+    _fallbackStore.bundleVersions = _fallbackStore.bundleVersions.filter((entry) => entry.bundle_id !== bundleId);
+    _fallbackStore.bundleApplications = _fallbackStore.bundleApplications.filter((entry) => entry.bundle_id !== bundleId);
+    return previousLength !== _fallbackStore.bundles.length;
+  }
+
+  const info = getDb().prepare('DELETE FROM bundles WHERE id = ?').run(bundleId);
+  return info.changes > 0;
+}
+
+function recordBundleApplication({
+  bundleId,
+  targetKind,
+  targetRef,
+  targetLabel,
+  targetMeta = {},
+  bundleVersion,
+  lastStatus = 'applied',
+  lastSummary = '',
+}) {
+  const payload = {
+    id: genId(),
+    bundle_id: bundleId,
+    target_kind: targetKind,
+    target_ref: targetRef,
+    target_label: targetLabel,
+    target_meta: JSON.stringify(targetMeta || {}),
+    bundle_version: bundleVersion,
+    applied_at: Date.now(),
+    last_status: lastStatus,
+    last_summary: lastSummary,
+  };
+
+  if (isFallback()) {
+    const existing = _fallbackStore.bundleApplications.find((entry) =>
+      entry.bundle_id === bundleId && entry.target_kind === targetKind && entry.target_ref === targetRef
+    );
+    if (existing) {
+      Object.assign(existing, payload, { id: existing.id });
+    } else {
+      _fallbackStore.bundleApplications.push(payload);
+    }
+    return;
+  }
+
+  getDb().prepare(`
+    INSERT INTO bundle_applications (
+      id, bundle_id, target_kind, target_ref, target_label, target_meta, bundle_version, applied_at, last_status, last_summary
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, unixepoch(), ?, ?)
+    ON CONFLICT(bundle_id, target_kind, target_ref) DO UPDATE SET
+      target_label = excluded.target_label,
+      target_meta = excluded.target_meta,
+      bundle_version = excluded.bundle_version,
+      applied_at = unixepoch(),
+      last_status = excluded.last_status,
+      last_summary = excluded.last_summary
+  `).run(
+    payload.id,
+    payload.bundle_id,
+    payload.target_kind,
+    payload.target_ref,
+    payload.target_label,
+    payload.target_meta,
+    payload.bundle_version,
+    payload.last_status,
+    payload.last_summary
+  );
+}
+
 // ─── History ──────────────────────────────────────────
 
 function recordAction(action, assetName, details) {
+  const payload = details || {};
+  const assetId = payload.assetId || payload.asset_id || null;
+  const serialized = JSON.stringify(payload);
   if (isFallback()) {
     const id = _fallbackStore.history.length + 1;
     _fallbackStore.history.push({
       id,
       action,
+      asset_id: assetId,
       asset_name: assetName,
-      details: JSON.stringify(details || {}),
+      details: serialized,
       created_at: Date.now(),
       reverted: 0,
     });
     return id;
   }
   const d = getDb();
-  const info = d.prepare('INSERT INTO history (action, asset_name, details) VALUES (?, ?, ?)').run(
-    action, assetName, JSON.stringify(details || {})
+  const info = d.prepare('INSERT INTO history (action, asset_id, asset_name, details) VALUES (?, ?, ?, ?)').run(
+    action,
+    assetId,
+    assetName,
+    serialized
   );
   return Number(info.lastInsertRowid);
 }
@@ -703,9 +1428,30 @@ module.exports = {
   getLocalEnvironmentId,
   getEnvironments,
   addEnvironment,
+  setEnvironmentReadOnly,
   getProjects,
   getProjectById,
   addProject,
+  setProjectType,
+  getSetting,
+  setSetting,
+  getAuditMode,
+  setGlobalReadOnly,
+  getSourceOfTruthMap,
+  getSourceOfTruth,
+  setSourceOfTruth,
+  clearSourceOfTruth,
+  getPolicies,
+  getPolicyById,
+  createPolicy,
+  updatePolicy,
+  deletePolicy,
+  getBundles,
+  getBundleById,
+  createBundle,
+  updateBundle,
+  deleteBundle,
+  recordBundleApplication,
   recordAction,
   saveSnapshot,
   getSnapshot,

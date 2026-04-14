@@ -20,7 +20,7 @@ struct CategorySectionView: View {
                 ForEach(assets) { asset in
                     AssetCardView(
                         asset: asset,
-                        usedBy: usedByMap[asset.name] ?? [],
+                        usedBy: usedByMap[asset.id] ?? [],
                         selectionMode: selectionMode,
                         selected: selectedAssetIDs.contains(asset.id),
                         onToggleSelection: onToggleSelection

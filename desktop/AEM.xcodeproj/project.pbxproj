@@ -16,6 +16,7 @@
 		71F214D4D595A0D82705825C /* CategorySectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 254F04B8F8FDC26045EB1CFF /* CategorySectionView.swift */; };
 		7DE135B470B7C4EB753E4C11 /* ProjectsListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43B0EE5246BE6D2833B43D75 /* ProjectsListView.swift */; };
 		8B24D8C0E83DD53B996B803A /* MenuBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D50807CDE2DB7363295EAD9 /* MenuBarView.swift */; };
+		0F2BE66CB6D14680B19A1A11 /* BundlesListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F2BE66DB6D14680B19A1A11 /* BundlesListView.swift */; };
 		AEB29796BF1E199276D923D6 /* AEMApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A6B5269E3F370E00C86E94B /* AEMApp.swift */; };
 		B46548F766D6D843E6DB685A /* EcosystemMapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC1C3EBBE70D62E97BBF4970 /* EcosystemMapView.swift */; };
 		B89BDE774D2FD55A5BBDC203 /* CreateAssetSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2146168E778F6C8F8CA35D8E /* CreateAssetSheet.swift */; };
@@ -40,6 +41,7 @@
 		4408F3DEB76751B02CF3A98E /* AgentService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentService.swift; sourceTree = "<group>"; };
 		4A6B5269E3F370E00C86E94B /* AEMApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AEMApp.swift; sourceTree = "<group>"; };
 		4D50807CDE2DB7363295EAD9 /* MenuBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarView.swift; sourceTree = "<group>"; };
+		0F2BE66DB6D14680B19A1A11 /* BundlesListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BundlesListView.swift; sourceTree = "<group>"; };
 		56E7F2DF703D8D694BA3C565 /* AEM.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AEM.entitlements; sourceTree = "<group>"; };
 		65EF22B132603AD45034A282 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		66CADE46ABABCAC92DA5276B /* AssetCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssetCardView.swift; sourceTree = "<group>"; };
@@ -95,6 +97,14 @@
 			path = Agents;
 			sourceTree = "<group>";
 		};
+		0F2BE66EB6D14680B19A1A11 /* Bundles */ = {
+			isa = PBXGroup;
+			children = (
+				0F2BE66DB6D14680B19A1A11 /* BundlesListView.swift */,
+			);
+			path = Bundles;
+			sourceTree = "<group>";
+		};
 		475223040F9D0255098762B9 /* Components */ = {
 			isa = PBXGroup;
 			children = (
@@ -138,6 +148,7 @@
 			isa = PBXGroup;
 			children = (
 				12701C8C93644842A4978263 /* Agents */,
+				0F2BE66EB6D14680B19A1A11 /* Bundles */,
 				475223040F9D0255098762B9 /* Components */,
 				0219CB88BBA21CEC6D3D4A6D /* EcosystemMap */,
 				BB1BAFEE85F04133E5DDC561 /* Projects */,
@@ -268,6 +279,7 @@
 				2CE9C2A855C1296A4465FB54 /* Asset.swift in Sources */,
 				2FAE18F608E8DD6485063DE5 /* AssetCardView.swift in Sources */,
 				F3A66599BF6003353A0EC05B /* AssetDetailView.swift in Sources */,
+				0F2BE66CB6D14680B19A1A11 /* BundlesListView.swift in Sources */,
 				71F214D4D595A0D82705825C /* CategorySectionView.swift in Sources */,
 				EF7F3009BF61DB5E295319EF /* ContentView.swift in Sources */,
 				B89BDE774D2FD55A5BBDC203 /* CreateAssetSheet.swift in Sources */,

@@ -17,12 +17,24 @@ struct ServersListView: View {
     @State private var batchTitle = ""
     @State private var isApplyingBatchSync = false
     @State private var discoveringProjects = Set<String>()
+    @State private var readOnlyUpdating = Set<String>()
+    @State private var serverRemediations: [String: [RemediationSuggestion]] = [:]
+    @State private var loadingServerRemediations: Set<String> = []
+    @State private var applyingServerRemediationID: String?
 
     var body: some View {
-        NavigationSplitView {
+        VStack(spacing: 0) {
+            topBar
+
+            HSplitView {
             List(store.servers, selection: Binding(
                 get: { selectedServer?.id },
-                set: { id in selectedServer = store.servers.first { $0.id == id } }
+                set: { id in
+                    selectedServer = store.servers.first { $0.id == id }
+                    if selectedServer?.id == store.focusedServerID {
+                        store.focusedServerID = nil
+                    }
+                }
             )) { server in
                 HStack {
                     Circle()
@@ -49,26 +61,43 @@ struct ServersListView: View {
                 }
                 .tag(server.id)
             }
-            .navigationTitle("Servers")
-            .toolbar {
-                ToolbarItem {
-                    Button { showAddServer = true } label: {
-                        Label("Add Server", systemImage: "plus")
-                    }
-                }
-            }
-        } detail: {
+            .listStyle(.sidebar)
+            .frame(minWidth: 280, idealWidth: 300, maxWidth: 340)
+
             if let server = selectedServer {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
                         // Server info
                         GroupBox {
                             VStack(alignment: .leading, spacing: 8) {
-                                Text(server.name).font(.title3.weight(.semibold))
+                                HStack(spacing: 8) {
+                                    Text(server.name).font(.title3.weight(.semibold))
+                                    if store.isEnvironmentReadOnly(server.id) {
+                                        Text("Read-Only")
+                                            .font(.caption.weight(.semibold))
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 3)
+                                            .background(Color.orange.opacity(0.12), in: Capsule())
+                                            .foregroundStyle(.orange)
+                                    }
+                                }
                                 if let summary = serverSummaryText(server) {
                                     Text(summary)
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
+                                }
+                                if let policy = server.policy, policy.violationCount > 0 {
+                                    Text("Policy: \(policy.summary)")
+                                        .font(.caption)
+                                        .foregroundStyle(policy.status.tint)
+                                }
+                                if let readOnlyReason = store.readOnlyReason(environmentId: server.id, environmentName: server.name) {
+                                    Text(readOnlyReason + " Push, pull, and apply actions are disabled.")
+                                        .font(.caption)
+                                        .foregroundStyle(.orange)
+                                        .padding(10)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
                                 }
                                 if server.type == "remote" {
                                     LabeledContent("Host", value: server.ssh_host ?? "-")
@@ -118,10 +147,94 @@ struct ServersListView: View {
                                             let api = api
                                             Task { diff = try? await api.diffServer(id: server.id) }
                                         }
+                                        Button(readOnlyUpdating.contains(server.id) ? "Updating..." : (store.isEnvironmentReadOnly(server.id) ? "Enable Writes" : "Read-Only")) {
+                                            let api = api
+                                            let store = store
+                                            let nextReadOnly = !store.isEnvironmentReadOnly(server.id)
+                                            readOnlyUpdating.insert(server.id)
+                                            Task {
+                                                defer { readOnlyUpdating.remove(server.id) }
+                                                do {
+                                                    let mode = try await api.setServerReadOnly(id: server.id, readOnly: nextReadOnly)
+                                                    store.auditMode = mode
+                                                    store.showToast(nextReadOnly ? "\(server.name) set to read-only audit mode" : "\(server.name) write access restored")
+                                                } catch {
+                                                    store.showToast("Failed to update read-only policy: \(error.localizedDescription)")
+                                                }
+                                            }
+                                        }
+                                        .disabled(store.globalReadOnly || readOnlyUpdating.contains(server.id))
                                     }
                                     .padding(.top, 4)
                                 } else {
                                     Text("Local machine").foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+
+                        let remediations = serverRemediations[server.id] ?? []
+                        if loadingServerRemediations.contains(server.id) || !remediations.isEmpty {
+                            GroupBox("Suggested Fixes") {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    if loadingServerRemediations.contains(server.id) {
+                                        ProgressView()
+                                    } else {
+                                        ForEach(remediations) { suggestion in
+                                            VStack(alignment: .leading, spacing: 6) {
+                                                HStack(alignment: .top, spacing: 8) {
+                                                    VStack(alignment: .leading, spacing: 4) {
+                                                        HStack(spacing: 6) {
+                                                            Text(suggestion.title)
+                                                                .font(.caption.weight(.semibold))
+                                                            Text(suggestion.category.replacingOccurrences(of: "_", with: " ").capitalized)
+                                                                .font(.caption2.weight(.semibold))
+                                                                .padding(.horizontal, 6)
+                                                                .padding(.vertical, 2)
+                                                                .background(.quaternary, in: Capsule())
+                                                                .foregroundStyle(.secondary)
+                                                            if suggestion.risky {
+                                                                Text("Risky")
+                                                                    .font(.caption2.weight(.semibold))
+                                                                    .padding(.horizontal, 6)
+                                                                    .padding(.vertical, 2)
+                                                                    .background(Color.orange.opacity(0.12), in: Capsule())
+                                                                    .foregroundStyle(.orange)
+                                                            }
+                                                        }
+                                                        Text(suggestion.summary)
+                                                            .font(.caption)
+                                                            .foregroundStyle(.secondary)
+                                                        if !suggestion.details.isEmpty {
+                                                            ForEach(Array(suggestion.details.enumerated()), id: \.offset) { entry in
+                                                                Text(entry.element)
+                                                                    .font(.caption2)
+                                                                    .foregroundStyle(.tertiary)
+                                                            }
+                                                        }
+                                                    }
+                                                    Spacer()
+                                                    if suggestion.canApply {
+                                                        Button(applyingServerRemediationID == suggestion.id ? "Applying..." : (suggestion.applyLabel ?? "Apply")) {
+                                                            Task { await applyServerRemediation(server, suggestion: suggestion) }
+                                                        }
+                                                        .controlSize(.small)
+                                                        .buttonStyle(.borderedProminent)
+                                                        .disabled(store.isEnvironmentReadOnly(server.id) || applyingServerRemediationID != nil)
+                                                    } else {
+                                                        Text("Guided")
+                                                            .font(.caption2.weight(.semibold))
+                                                            .padding(.horizontal, 8)
+                                                            .padding(.vertical, 3)
+                                                            .background(.quaternary, in: Capsule())
+                                                            .foregroundStyle(.secondary)
+                                                    }
+                                                }
+                                            }
+                                            .padding(8)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -173,7 +286,7 @@ struct ServersListView: View {
                                             }
                                         }
                                         .controlSize(.small)
-                                        .disabled(filteredOnlyLocal(diff: diff).isEmpty)
+                                        .disabled(store.isEnvironmentReadOnly(server.id) || filteredOnlyLocal(diff: diff).isEmpty)
 
                                         Button("Pull Visible Only-Remote") {
                                             Task {
@@ -186,7 +299,7 @@ struct ServersListView: View {
                                             }
                                         }
                                         .controlSize(.small)
-                                        .disabled(filteredOnlyRemote(diff: diff).isEmpty)
+                                        .disabled(store.isEnvironmentReadOnly(server.id) || filteredOnlyRemote(diff: diff).isEmpty)
 
                                         Button("Push Visible Drifted") {
                                             Task {
@@ -199,7 +312,7 @@ struct ServersListView: View {
                                             }
                                         }
                                         .controlSize(.small)
-                                        .disabled(filteredDriftedAssets(diff: diff, direction: "push").isEmpty)
+                                        .disabled(store.isEnvironmentReadOnly(server.id) || filteredDriftedAssets(diff: diff, direction: "push").isEmpty)
 
                                         Button("Pull Visible Drifted") {
                                             Task {
@@ -212,7 +325,7 @@ struct ServersListView: View {
                                             }
                                         }
                                         .controlSize(.small)
-                                        .disabled(filteredDriftedAssets(diff: diff, direction: "pull").isEmpty)
+                                        .disabled(store.isEnvironmentReadOnly(server.id) || filteredDriftedAssets(diff: diff, direction: "pull").isEmpty)
                                     }
 
                                     HStack(alignment: .top, spacing: 16) {
@@ -230,11 +343,20 @@ struct ServersListView: View {
                 }
             } else {
                 ContentUnavailableView("Select a server", systemImage: "server.rack")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task(id: api.isReady) {
             guard api.isReady else { return }
             await store.loadServers(api: api)
+        }
+        .task(id: store.focusedServerID) {
+            await applyFocusedServerSelection()
+        }
+        .task(id: selectedServer?.id) {
+            await loadServerRemediations()
         }
         .sheet(isPresented: $showAddServer) {
             AddServerSheet()
@@ -254,6 +376,8 @@ struct ServersListView: View {
                     title: syncTitle,
                     plan: syncPlan,
                     isApplying: isApplyingSync,
+                    readOnly: selectedServer.map { store.isEnvironmentReadOnly($0.id) } ?? store.globalReadOnly,
+                    readOnlyReason: selectedServer.flatMap { store.readOnlyReason(environmentId: $0.id, environmentName: $0.name) },
                     onApply: { Task { await applyPendingSync() } }
                 )
             }
@@ -273,10 +397,35 @@ struct ServersListView: View {
                     title: batchTitle,
                     preview: batchPreview,
                     isApplying: isApplyingBatchSync,
+                    readOnly: selectedServer.map { store.isEnvironmentReadOnly($0.id) } ?? store.globalReadOnly,
+                    readOnlyReason: selectedServer.flatMap { store.readOnlyReason(environmentId: $0.id, environmentName: $0.name) },
                     onApply: { Task { await applyPendingBatchSync() } }
                 )
             }
         }
+    }
+
+    private var topBar: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Servers")
+                    .font(.headline)
+                Text("\(store.servers.count) environments available for remote sync, audit, and discovery.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Button {
+                showAddServer = true
+            } label: {
+                Label("Add Server", systemImage: "plus")
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.bar)
     }
 
     private func serverSummaryText(_ server: ServerEnvironment) -> String? {
@@ -291,7 +440,20 @@ struct ServersListView: View {
         if let agentCount = summary?.agentCount {
             items.append("\(agentCount) agents")
         }
+        items.append(contentsOf: server.policy?.compactItems ?? [])
         return items.isEmpty ? nil : items.joined(separator: " · ")
+    }
+
+    private func loadServerRemediations() async {
+        guard let server = selectedServer else { return }
+        loadingServerRemediations.insert(server.id)
+        defer { loadingServerRemediations.remove(server.id) }
+
+        do {
+            serverRemediations[server.id] = try await api.fetchServerRemediations(serverId: server.id)
+        } catch {
+            serverRemediations[server.id] = []
+        }
     }
 
     private func diffColumn(_ title: String, assets: [Asset], color: Color, server: ServerEnvironment, canPush: Bool) -> some View {
@@ -316,11 +478,13 @@ struct ServersListView: View {
                                 Task { await previewServerSync(serverId: server.id, asset: asset, direction: "push") }
                             }
                             .controlSize(.mini)
+                            .disabled(store.isEnvironmentReadOnly(server.id))
                         } else if !canPush, syncableTypes.contains(asset.type) {
                             Button("Pull") {
                                 Task { await previewServerSync(serverId: server.id, asset: asset, direction: "pull") }
                             }
                             .controlSize(.mini)
+                            .disabled(store.isEnvironmentReadOnly(server.id))
                         }
                     }
                 }
@@ -352,10 +516,12 @@ struct ServersListView: View {
                                     Task { await previewServerSync(serverId: server.id, asset: pair.local, direction: "push") }
                                 }
                                 .controlSize(.mini)
+                                .disabled(store.isEnvironmentReadOnly(server.id))
                                 Button("Pull") {
                                     Task { await previewServerSync(serverId: server.id, asset: pair.remote, direction: "pull") }
                                 }
                                 .controlSize(.mini)
+                                .disabled(store.isEnvironmentReadOnly(server.id))
                             }
 
                             Text(pair.summary)
@@ -421,13 +587,63 @@ struct ServersListView: View {
         }
     }
 
+    private func confirmRiskyServerRemediation(_ suggestion: RemediationSuggestion) -> Bool {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Apply risky fix?"
+        alert.informativeText = ([suggestion.summary] + suggestion.details).joined(separator: "\n")
+        alert.addButton(withTitle: suggestion.applyLabel ?? "Apply")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    @MainActor
+    private func applyServerRemediation(_ server: ServerEnvironment, suggestion: RemediationSuggestion) async {
+        guard suggestion.canApply else { return }
+        guard !store.isEnvironmentReadOnly(server.id) else {
+            store.showToast(store.readOnlyReason(environmentId: server.id, environmentName: server.name) ?? "Read-only audit mode is enabled")
+            return
+        }
+        guard applyingServerRemediationID == nil else { return }
+        if suggestion.risky && !confirmRiskyServerRemediation(suggestion) {
+            return
+        }
+
+        applyingServerRemediationID = suggestion.id
+        defer { applyingServerRemediationID = nil }
+
+        do {
+            _ = try await api.applyServerRemediation(
+                serverId: server.id,
+                remediationId: suggestion.id,
+                confirmRisk: suggestion.risky,
+                approval: .client("macos", note: suggestion.risky ? "Approved risky server remediation" : "Approved server remediation")
+            )
+            store.showToast(suggestion.applyLabel ?? "Fix applied")
+            await store.loadServers(api: api)
+            if let refreshed = store.servers.first(where: { $0.id == server.id }) {
+                selectedServer = refreshed
+                await loadServerRemediations()
+                if refreshed.type == "remote" {
+                    diff = try? await api.diffServer(id: refreshed.id)
+                }
+            }
+        } catch {
+            store.showToast(error.localizedDescription.isEmpty ? "Failed to apply suggested fix" : error.localizedDescription)
+        }
+    }
+
     private func applyPendingSync() async {
+        if let selectedServer, store.isEnvironmentReadOnly(selectedServer.id) {
+            store.showToast(store.readOnlyReason(environmentId: selectedServer.id, environmentName: selectedServer.name) ?? "Read-only audit mode is enabled")
+            return
+        }
         guard let pendingSyncRequest else { return }
         isApplyingSync = true
         defer { isApplyingSync = false }
 
         do {
-            let response = try await api.applySync(pendingSyncRequest)
+            let response = try await api.applySync(pendingSyncRequest, approval: .client("macos", note: "Approved server sync"))
             guard response.ok else {
                 store.showToast("Sync failed: \(response.error ?? "Unknown error")")
                 return
@@ -520,12 +736,16 @@ struct ServersListView: View {
     }
 
     private func applyPendingBatchSync() async {
+        if let selectedServer, store.isEnvironmentReadOnly(selectedServer.id) {
+            store.showToast(store.readOnlyReason(environmentId: selectedServer.id, environmentName: selectedServer.name) ?? "Read-only audit mode is enabled")
+            return
+        }
         guard !batchRequests.isEmpty else { return }
         isApplyingBatchSync = true
         defer { isApplyingBatchSync = false }
 
         do {
-            let response = try await api.applyBatchSync(batchRequests)
+            let response = try await api.applyBatchSync(batchRequests, approval: .client("macos", note: "Approved batch server sync"))
             store.showToast("Batch sync applied: \(response.successCount)/\(response.total)")
             batchPreview = nil
             batchRequests = []
@@ -538,6 +758,24 @@ struct ServersListView: View {
         } catch {
             store.showToast("Batch sync failed: \(error.localizedDescription)")
         }
+    }
+
+    @MainActor
+    private func applyFocusedServerSelection() async {
+        guard let focusedServerID = store.focusedServerID,
+              let server = store.servers.first(where: { $0.id == focusedServerID }) else { return }
+        guard selectedServer?.id != server.id else {
+            store.focusedServerID = nil
+            return
+        }
+        selectedServer = server
+        store.focusedServerID = nil
+        if server.type == "remote" {
+            diff = try? await api.diffServer(id: server.id)
+        } else {
+            diff = nil
+        }
+        await loadServerRemediations()
     }
 }
 
@@ -610,6 +848,8 @@ struct SyncPlanSheet: View {
     let title: String
     let plan: SyncPlan
     let isApplying: Bool
+    let readOnly: Bool
+    let readOnlyReason: String?
     let onApply: () -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -619,7 +859,7 @@ struct SyncPlanSheet: View {
     }
 
     private var canApply: Bool {
-        plan.canApply && plan.hasChanges && !hasBlockingIssues
+        !readOnly && plan.canApply && plan.hasChanges && !hasBlockingIssues
     }
 
     var body: some View {
@@ -631,6 +871,23 @@ struct SyncPlanSheet: View {
                     Text("\(plan.source?.name ?? "Asset") → \(plan.target?.label ?? plan.target?.kind ?? "Target")")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+
+                if let git = plan.target?.git {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: git.conflictedCount > 0 ? "exclamationmark.triangle.fill" : "arrow.triangle.branch")
+                            .foregroundStyle(git.conflictedCount > 0 ? .red : (git.dirty ? .orange : .green))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Git Target")
+                                .font(.caption.weight(.semibold))
+                            Text(git.summary)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background((git.conflictedCount > 0 ? Color.red : (git.dirty ? Color.orange : Color.green)).opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
                 }
 
                 if !plan.issues.isEmpty {
@@ -646,6 +903,18 @@ struct SyncPlanSheet: View {
                             }
                         }
                     }
+                }
+
+                if let readOnlyReason {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "lock.fill")
+                            .foregroundStyle(.orange)
+                        Text(readOnlyReason)
+                            .font(.caption)
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
                 }
 
                 VStack(alignment: .leading, spacing: 8) {

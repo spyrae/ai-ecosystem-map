@@ -25,7 +25,9 @@ final class APIClient: @unchecked Sendable {
 
     private func get<T: Decodable>(_ path: String, params: [String: String] = [:]) async throws -> T {
         let url = makeURL(path, params: params)
-        let (data, response) = try await session.data(from: url)
+        var request = URLRequest(url: url)
+        request.setValue("macos", forHTTPHeaderField: "X-AEM-Client")
+        let (data, response) = try await session.data(for: request)
         try validateResponse(response, url: url)
         return try decode(data, url: url)
     }
@@ -35,6 +37,7 @@ final class APIClient: @unchecked Sendable {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("macos", forHTTPHeaderField: "X-AEM-Client")
         request.httpBody = try JSONEncoder().encode(body)
         let (data, response) = try await session.data(for: request)
         try validateResponse(response, url: url)
@@ -46,6 +49,7 @@ final class APIClient: @unchecked Sendable {
         var request = URLRequest(url: url)
         request.httpMethod = "PUT"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("macos", forHTTPHeaderField: "X-AEM-Client")
         request.httpBody = try JSONEncoder().encode(body)
         let (data, response) = try await session.data(for: request)
         try validateResponse(response, url: url)
@@ -56,6 +60,7 @@ final class APIClient: @unchecked Sendable {
         let url = makeURL(path, params: params)
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
+        request.setValue("macos", forHTTPHeaderField: "X-AEM-Client")
         let (data, response) = try await session.data(for: request)
         try validateResponse(response, url: url)
         return try decode(data, url: url)
@@ -159,6 +164,41 @@ final class APIClient: @unchecked Sendable {
         return response.data!
     }
 
+    func fetchDependencies() async throws -> DependencyGraph {
+        let response: APIResponse<DependencyGraph> = try await get("api/dependencies")
+        return response.data!
+    }
+
+    func fetchDrift() async throws -> DriftGraph {
+        let response: APIResponse<DriftGraph> = try await get("api/drift")
+        return response.data!
+    }
+
+    func fetchAuditMode() async throws -> AuditMode {
+        let response: APIResponse<AuditMode> = try await get("api/audit-mode")
+        return response.data!
+    }
+
+    func setGlobalReadOnly(_ readOnly: Bool) async throws -> AuditMode {
+        let response: APIResponse<AuditMode> = try await post("api/audit-mode/global", body: ["readOnly": readOnly])
+        return response.data!
+    }
+
+    func setServerReadOnly(id: String, readOnly: Bool) async throws -> AuditMode {
+        let response: APIResponse<AuditMode> = try await post("api/servers/\(id)/read-only", body: ["readOnly": readOnly])
+        return response.data!
+    }
+
+    func fetchAuditReport() async throws -> AuditReport {
+        let response: APIResponse<AuditReport> = try await get("api/audit/report")
+        return response.data!
+    }
+
+    func setSourceOfTruth(groupKey: String, assetId: String) async throws -> DriftGroup? {
+        let response: SourceOfTruthResponse = try await post("api/drift/source-truth", body: SourceOfTruthBody(groupKey: groupKey, assetId: assetId))
+        return response.data
+    }
+
     func fetchCategories() async throws -> [String: Int] {
         let response: APIResponse<[String: Int]> = try await get("api/categories")
         return response.data ?? [:]
@@ -174,12 +214,12 @@ final class APIClient: @unchecked Sendable {
         return response.data ?? []
     }
 
-    func rollbackHistoryEntry(_ historyId: Int) async throws {
-        let _: APIResult = try await post("api/history/\(historyId)/rollback", body: EmptyBody())
+    func rollbackHistoryEntry(_ historyId: Int, approval: ApprovalPayload? = nil) async throws {
+        let _: APIResult = try await post("api/history/\(historyId)/rollback", body: ApprovalBody(approval: approval))
     }
 
-    func undoLastAction() async throws {
-        let _: APIResult = try await post("api/undo", body: EmptyBody())
+    func undoLastAction(approval: ApprovalPayload? = nil) async throws {
+        let _: APIResult = try await post("api/undo", body: ApprovalBody(approval: approval))
     }
 
     func rescan() async throws -> Int {
@@ -204,6 +244,11 @@ final class APIClient: @unchecked Sendable {
         return response.data!
     }
 
+    func updateProject(id: String, projectType: String?) async throws -> Project {
+        let response: APIResponse<Project> = try await put("api/projects/\(id.urlEncoded)", body: UpdateProjectBody(project_type: projectType))
+        return response.data!
+    }
+
     func fetchProjectAssets(path: String) async throws -> [ProjectAsset] {
         let response: APIResponse<[ProjectAsset]> = try await get("api/projects/\(path.urlEncoded)/assets")
         return response.data ?? []
@@ -217,6 +262,178 @@ final class APIClient: @unchecked Sendable {
     func discoverRemoteProjects(serverId: String, dirs: [String] = []) async throws -> [Project] {
         let response: APIResponse<[Project]> = try await post("api/servers/\(serverId)/projects/discover", body: ["dirs": dirs])
         return response.data ?? []
+    }
+
+    // MARK: - Bundles
+
+    func fetchBundles() async throws -> [Bundle] {
+        let response: APIResponse<[Bundle]> = try await get("api/bundles")
+        return response.data ?? []
+    }
+
+    // MARK: - Policies
+
+    func fetchPolicies() async throws -> [Policy] {
+        let response: APIResponse<[Policy]> = try await get("api/policies")
+        return response.data ?? []
+    }
+
+    func fetchPolicyEvaluation() async throws -> PolicyEvaluation {
+        let response: APIResponse<PolicyEvaluation> = try await get("api/policies/evaluate")
+        return response.data!
+    }
+
+    func fetchAssetRemediations(assetId: String, type: AssetType? = nil) async throws -> [RemediationSuggestion] {
+        var params: [String: String] = [:]
+        if let type { params["type"] = type.rawValue }
+        let response: APIResponse<[RemediationSuggestion]> = try await get("api/assets/\(assetId.urlEncoded)/remediations", params: params)
+        return response.data ?? []
+    }
+
+    func applyAssetRemediation(assetId: String, remediationId: String, type: AssetType? = nil, confirmRisk: Bool = false, approval: ApprovalPayload? = nil) async throws {
+        let _: APIResult = try await post(
+            "api/assets/\(assetId.urlEncoded)/remediations/\(remediationId.urlEncoded)/apply",
+            body: RemediationApplyBody(type: type?.rawValue, confirmRisk: confirmRisk, approval: approval)
+        )
+    }
+
+    func fetchProjectRemediations(projectId: String) async throws -> [RemediationSuggestion] {
+        let response: APIResponse<[RemediationSuggestion]> = try await get("api/projects/\(projectId.urlEncoded)/remediations")
+        return response.data ?? []
+    }
+
+    func applyProjectRemediation(projectId: String, remediationId: String, confirmRisk: Bool = false, approval: ApprovalPayload? = nil) async throws {
+        let _: APIResult = try await post(
+            "api/projects/\(projectId.urlEncoded)/remediations/\(remediationId.urlEncoded)/apply",
+            body: RemediationApplyBody(type: nil, confirmRisk: confirmRisk, approval: approval)
+        )
+    }
+
+    func fetchServerRemediations(serverId: String) async throws -> [RemediationSuggestion] {
+        let response: APIResponse<[RemediationSuggestion]> = try await get("api/servers/\(serverId.urlEncoded)/remediations")
+        return response.data ?? []
+    }
+
+    func applyServerRemediation(serverId: String, remediationId: String, confirmRisk: Bool = false, approval: ApprovalPayload? = nil) async throws {
+        let _: APIResult = try await post(
+            "api/servers/\(serverId.urlEncoded)/remediations/\(remediationId.urlEncoded)/apply",
+            body: RemediationApplyBody(type: nil, confirmRisk: confirmRisk, approval: approval)
+        )
+    }
+
+    func createPolicy(
+        name: String,
+        description: String = "",
+        enabled: Bool = true,
+        severity: PolicySeverity = .warning,
+        selectors: PolicySelectors,
+        rules: [PolicyRule]
+    ) async throws -> Policy {
+        let response: APIResponse<Policy> = try await post(
+            "api/policies",
+            body: PolicyUpsertBody(
+                name: name,
+                description: description,
+                enabled: enabled,
+                severity: severity,
+                selectors: selectors,
+                rules: rules
+            )
+        )
+        return response.data!
+    }
+
+    func updatePolicy(
+        id: String,
+        name: String? = nil,
+        description: String? = nil,
+        enabled: Bool? = nil,
+        severity: PolicySeverity? = nil,
+        selectors: PolicySelectors? = nil,
+        rules: [PolicyRule]? = nil
+    ) async throws -> Policy {
+        let response: APIResponse<Policy> = try await put(
+            "api/policies/\(id.urlEncoded)",
+            body: PolicyUpsertBody(
+                name: name,
+                description: description,
+                enabled: enabled,
+                severity: severity,
+                selectors: selectors,
+                rules: rules
+            )
+        )
+        return response.data!
+    }
+
+    func deletePolicy(id: String) async throws {
+        let _: APIResult = try await delete("api/policies/\(id.urlEncoded)")
+    }
+
+    func fetchBundle(id: String) async throws -> Bundle {
+        let response: APIResponse<Bundle> = try await get("api/bundles/\(id.urlEncoded)")
+        return response.data!
+    }
+
+    func createBundle(name: String, description: String = "", versionLabel: String = "", items: [BundleItem]) async throws -> Bundle {
+        let response: APIResponse<Bundle> = try await post(
+            "api/bundles",
+            body: BundleUpsertBody(name: name, description: description, versionLabel: versionLabel, items: items)
+        )
+        return response.data!
+    }
+
+    func updateBundle(id: String, name: String? = nil, description: String? = nil, versionLabel: String = "", items: [BundleItem]? = nil) async throws -> Bundle {
+        let response: APIResponse<Bundle> = try await put(
+            "api/bundles/\(id.urlEncoded)",
+            body: BundleUpsertBody(name: name, description: description, versionLabel: versionLabel, items: items)
+        )
+        return response.data!
+    }
+
+    func deleteBundle(id: String) async throws {
+        let _: APIResult = try await delete("api/bundles/\(id.urlEncoded)")
+    }
+
+    func previewBundle(id: String, target: BundleTargetRequest) async throws -> BundlePreviewData {
+        let response: APIResponse<BundlePreviewData> = try await post("api/bundles/\(id.urlEncoded)/preview", body: BundleTargetBody(target: target))
+        return response.data!
+    }
+
+    func applyBundle(id: String, target: BundleTargetRequest) async throws -> BundleApplyData {
+        let response: APIResponse<BundleApplyData> = try await post("api/bundles/\(id.urlEncoded)/apply", body: BundleTargetBody(target: target))
+        return response.data!
+    }
+
+    @MainActor
+    func exportWorkspaceManifest(
+        includeAssets: Bool = true,
+        includeBundles: Bool = true,
+        includePolicies: Bool = true
+    ) async throws -> WorkspaceManifest {
+        let response: APIResponse<WorkspaceManifest> = try await post(
+            "api/manifest/export",
+            body: ManifestExportBody(includeAssets: includeAssets, includeBundles: includeBundles, includePolicies: includePolicies)
+        )
+        return response.data!
+    }
+
+    @MainActor
+    func previewImportManifest(_ manifest: WorkspaceManifest) async throws -> WorkspaceManifestImportPreviewData {
+        let response: APIResponse<WorkspaceManifestImportPreviewData> = try await post(
+            "api/manifest/preview-import",
+            body: ManifestImportBody(manifest: manifest, approval: nil)
+        )
+        return response.data!
+    }
+
+    @MainActor
+    func applyImportManifest(_ manifest: WorkspaceManifest, approval: ApprovalPayload? = nil) async throws -> WorkspaceManifestImportApplyData {
+        let response: APIResponse<WorkspaceManifestImportApplyData> = try await post(
+            "api/manifest/apply-import",
+            body: ManifestImportBody(manifest: manifest, approval: approval)
+        )
+        return response.data!
     }
 
     // MARK: - Servers
@@ -252,8 +469,10 @@ final class APIClient: @unchecked Sendable {
         return response.plan
     }
 
-    func applySync(_ request: SyncRequestPayload) async throws -> SyncApplyResponse {
-        try await post("api/sync/apply", body: request)
+    func applySync(_ request: SyncRequestPayload, approval: ApprovalPayload? = nil) async throws -> SyncApplyResponse {
+        var payload = request
+        payload.approval = approval
+        return try await post("api/sync/apply", body: payload)
     }
 
     func validateBatch(_ items: [BatchActionItem]) async throws -> BatchActionResult {
@@ -268,16 +487,16 @@ final class APIClient: @unchecked Sendable {
         try await post("api/batch/disconnect", body: BatchToolBody(items: items, tool: tool))
     }
 
-    func deleteBatch(_ items: [BatchActionItem]) async throws -> BatchActionResult {
-        try await post("api/batch/delete", body: BatchItemsBody(items: items))
+    func deleteBatch(_ items: [BatchActionItem], approval: ApprovalPayload? = nil) async throws -> BatchActionResult {
+        try await post("api/batch/delete", body: BatchItemsBody(items: items, approval: approval))
     }
 
     func previewBatchSync(_ requests: [SyncRequestPayload]) async throws -> BatchSyncPreview {
         try await post("api/batch/sync/preview", body: BatchSyncBody(requests: requests))
     }
 
-    func applyBatchSync(_ requests: [SyncRequestPayload]) async throws -> BatchSyncApplyResult {
-        try await post("api/batch/sync/apply", body: BatchSyncBody(requests: requests))
+    func applyBatchSync(_ requests: [SyncRequestPayload], approval: ApprovalPayload? = nil) async throws -> BatchSyncApplyResult {
+        try await post("api/batch/sync/apply", body: BatchSyncBody(requests: requests, approval: approval))
     }
 
     func pushToServer(id: String, asset: Asset) async throws {
@@ -314,6 +533,19 @@ final class APIClient: @unchecked Sendable {
         try await get("api/mcp/\(assetId.urlEncoded)/config")
     }
 
+    func fetchMcpRuntime(assetId: String) async throws -> McpRuntimeCheck {
+        let response: APIResponse<McpRuntimeCheck> = try await get("api/mcp/\(assetId.urlEncoded)/runtime")
+        return response.data!
+    }
+
+    func runMcpRuntimeCheck(assetId: String, force: Bool = true, timeoutMs: Int? = nil) async throws -> McpRuntimeCheck {
+        let response: APIResponse<McpRuntimeCheck> = try await post(
+            "api/mcp/\(assetId.urlEncoded)/runtime",
+            body: RunMcpRuntimeBody(force: force, timeoutMs: timeoutMs)
+        )
+        return response.data!
+    }
+
     func listMcpTools(assetId: String) async throws -> [McpTool] {
         let response: McpToolsResponse = try await post("api/mcp/\(assetId.urlEncoded)/tools", body: EmptyBody())
         return response.tools ?? []
@@ -334,6 +566,19 @@ final class APIClient: @unchecked Sendable {
 
     func removeRunningAgent(id: String) async throws {
         let _: APIResult = try await delete("api/running-agents/\(id)")
+    }
+
+    func fetchRunningAgentIntrospection(id: String) async throws -> RunningAgentIntrospection {
+        let response: APIResponse<RunningAgentIntrospection> = try await get("api/running-agents/\(id.urlEncoded)/introspection")
+        return response.data!
+    }
+
+    func runRunningAgentIntrospection(id: String, force: Bool = true, timeoutMs: Int? = nil) async throws -> RunningAgentIntrospection {
+        let response: APIResponse<RunningAgentIntrospection> = try await post(
+            "api/running-agents/\(id.urlEncoded)/introspection",
+            body: RunMcpRuntimeBody(force: force, timeoutMs: timeoutMs)
+        )
+        return response.data!
     }
 
     func listAgentTools(id: String) async throws -> [McpTool] {
@@ -419,11 +664,19 @@ private struct McpToolsResponse: Decodable {
     let ok: Bool
     let tools: [McpTool]?
     let count: Int?
+    let runtime: McpRuntimeCheck?
+    let introspection: RunningAgentIntrospection?
+    let error: String?
 }
 
 // MARK: - Request Bodies
 
 private struct EmptyBody: Encodable {}
+
+private struct RunMcpRuntimeBody: Encodable {
+    let force: Bool
+    let timeoutMs: Int?
+}
 
 private struct ConnectBody: Encodable {
     let assetId: String
@@ -466,8 +719,30 @@ private struct AddRunningAgentBody: Encodable {
     let `protocol`: String
 }
 
+private struct UpdateProjectBody: Encodable {
+    let project_type: String?
+}
+
+private struct RemediationApplyBody: Encodable {
+    let type: String?
+    let confirmRisk: Bool
+    let approval: ApprovalPayload?
+
+    init(type: String?, confirmRisk: Bool, approval: ApprovalPayload? = nil) {
+        self.type = type
+        self.confirmRisk = confirmRisk
+        self.approval = approval
+    }
+}
+
 private struct BatchItemsBody: Encodable {
     let items: [BatchActionItem]
+    let approval: ApprovalPayload?
+
+    init(items: [BatchActionItem], approval: ApprovalPayload? = nil) {
+        self.items = items
+        self.approval = approval
+    }
 }
 
 private struct BatchToolBody: Encodable {
@@ -477,6 +752,60 @@ private struct BatchToolBody: Encodable {
 
 private struct BatchSyncBody: Encodable {
     let requests: [SyncRequestPayload]
+    let approval: ApprovalPayload?
+
+    init(requests: [SyncRequestPayload], approval: ApprovalPayload? = nil) {
+        self.requests = requests
+        self.approval = approval
+    }
+}
+
+private struct ApprovalBody: Encodable {
+    let approval: ApprovalPayload?
+
+    init(approval: ApprovalPayload? = nil) {
+        self.approval = approval
+    }
+}
+
+struct BundleTargetRequest: Codable {
+    let kind: String
+    let provider: String?
+    let projectPath: String?
+    let method: String?
+    let serverId: String?
+    let agentId: String?
+}
+
+private struct BundleTargetBody: Encodable {
+    let target: BundleTargetRequest
+}
+
+private struct ManifestExportBody: Encodable {
+    let includeAssets: Bool
+    let includeBundles: Bool
+    let includePolicies: Bool
+}
+
+private struct ManifestImportBody: Encodable, Sendable {
+    let manifest: WorkspaceManifest
+    let approval: ApprovalPayload?
+}
+
+private struct BundleUpsertBody: Encodable {
+    let name: String?
+    let description: String?
+    let versionLabel: String
+    let items: [BundleItem]?
+}
+
+private struct PolicyUpsertBody: Encodable {
+    let name: String?
+    let description: String?
+    let enabled: Bool?
+    let severity: PolicySeverity?
+    let selectors: PolicySelectors?
+    let rules: [PolicyRule]?
 }
 
 struct SyncSourceInput: Codable {
@@ -499,6 +828,7 @@ struct SyncTargetInput: Codable {
 struct SyncRequestPayload: Codable {
     let source: SyncSourceInput
     let target: SyncTargetInput
+    var approval: ApprovalPayload? = nil
 }
 
 private struct SyncPreviewResponse: Decodable {
@@ -506,11 +836,23 @@ private struct SyncPreviewResponse: Decodable {
     let plan: SyncPlan
 }
 
+private struct SourceOfTruthResponse: Decodable {
+    let ok: Bool
+    let groupKey: String
+    let assetId: String
+    let data: DriftGroup?
+}
+
 private struct PushPullBody: Encodable {
     let assetId: String?
     let name: String?
     let type: String
     let remotePath: String?
+}
+
+private struct SourceOfTruthBody: Encodable {
+    let groupKey: String
+    let assetId: String
 }
 
 private struct MoveAssetBody: Encodable {

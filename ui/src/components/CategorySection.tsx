@@ -70,16 +70,16 @@ export function CategorySection({
       </button>
 
       {!collapsed && (
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {assets.map((asset, i) => (
             <div
-              key={`${asset.type}-${asset.name}`}
+              key={asset.id}
               className="animate-fade-in-up"
               style={{ animationDelay: `${Math.min(i * 30, 300)}ms` }}
             >
               <AssetCard
                 asset={asset}
-                usedBy={usedByMap[asset.name] || []}
+                usedBy={usedByMap[asset.id] || []}
                 onConnect={onConnect}
                 onNavigate={onNavigate}
                 onClick={onAssetClick}

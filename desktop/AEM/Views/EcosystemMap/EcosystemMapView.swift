@@ -14,6 +14,16 @@ struct EcosystemMapView: View {
             // Top bar: search + actions
             topBar
 
+            if store.globalReadOnly {
+                Text("Global read-only audit mode is enabled. Create, connect, disconnect, delete, and apply actions are disabled.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(Color.orange.opacity(0.08))
+            }
+
             // Stats bar
             if let stats = store.stats {
                 StatsBarView(stats: stats, healthCounts: store.healthCounts)
@@ -74,7 +84,13 @@ struct EcosystemMapView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This will delete \(store.selectedAssets.count) selected assets and cannot be undone.")
+            let impactedAssets = store.selectedAssets.filter { ($0.dependency?.consumerCount ?? 0) > 0 }
+            let totalConsumers = impactedAssets.reduce(0) { $0 + ($1.dependency?.consumerCount ?? 0) }
+            if impactedAssets.isEmpty {
+                Text("This will delete \(store.selectedAssets.count) selected assets and cannot be undone.")
+            } else {
+                Text("This will delete \(store.selectedAssets.count) selected assets. \(impactedAssets.count) of them have downstream consumers (\(totalConsumers) total assets, running agents, or provider targets), and this cannot be undone.")
+            }
         }
     }
 
@@ -157,19 +173,19 @@ struct EcosystemMapView: View {
                     Task { await runBatchConnect(mode: .connect) }
                 }
                 .controlSize(.small)
-                .disabled(isBatchRunning || store.selectedAssets.isEmpty)
+                .disabled(store.globalReadOnly || isBatchRunning || store.selectedAssets.isEmpty)
 
                 Button("Disconnect Selected") {
                     Task { await runBatchConnect(mode: .disconnect) }
                 }
                 .controlSize(.small)
-                .disabled(isBatchRunning || store.selectedAssets.isEmpty)
+                .disabled(store.globalReadOnly || isBatchRunning || store.selectedAssets.isEmpty)
 
                 Button("Delete Selected", role: .destructive) {
                     showBatchDeleteConfirmation = true
                 }
                 .controlSize(.small)
-                .disabled(isBatchRunning || store.selectedAssets.isEmpty)
+                .disabled(store.globalReadOnly || isBatchRunning || store.selectedAssets.isEmpty)
             }
 
             Button {
@@ -196,6 +212,7 @@ struct EcosystemMapView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
+            .disabled(store.globalReadOnly)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -275,7 +292,7 @@ struct EcosystemMapView: View {
         defer { isBatchRunning = false }
 
         do {
-            let result = try await api.deleteBatch(items)
+            let result = try await api.deleteBatch(items, approval: .client("macos", note: "Confirmed batch delete from ecosystem map"))
             await MainActor.run {
                 let failedIds = Set(result.results.filter { !$0.ok }.map(\.id))
                 store.selectedAssetIDs = failedIds

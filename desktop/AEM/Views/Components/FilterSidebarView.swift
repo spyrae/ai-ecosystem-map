@@ -47,6 +47,36 @@ struct FilterSidebarView: View {
                     }
                 }
 
+                Divider()
+
+                filterSection("Dependency") {
+                    ForEach(AssetDependencyFilter.allCases) { filter in
+                        filterRow(
+                            label: filter.label,
+                            count: store.dependencyCounts[filter] ?? 0,
+                            icon: filter.icon,
+                            isActive: store.dependencyFilter == filter
+                        ) {
+                            store.dependencyFilter = store.dependencyFilter == filter ? nil : filter
+                        }
+                    }
+                }
+
+                Divider()
+
+                filterSection("Drift") {
+                    ForEach(AssetDriftStatus.allCases) { filter in
+                        filterRow(
+                            label: filter.label,
+                            count: store.driftCounts[filter] ?? 0,
+                            icon: driftIcon(for: filter),
+                            isActive: store.driftFilter == filter
+                        ) {
+                            store.driftFilter = store.driftFilter == filter ? nil : filter
+                        }
+                    }
+                }
+
                 if !store.categories.isEmpty {
                     Divider()
 
@@ -102,5 +132,14 @@ struct FilterSidebarView: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(isActive ? Color.accentColor : .primary)
+    }
+
+    private func driftIcon(for filter: AssetDriftStatus) -> String {
+        switch filter {
+        case .source: "externaldrive.badge.checkmark"
+        case .synced: "checkmark.seal.fill"
+        case .drifted: "arrow.triangle.branch"
+        case .orphaned: "exclamationmark.octagon.fill"
+        }
     }
 }

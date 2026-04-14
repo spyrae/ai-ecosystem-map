@@ -68,6 +68,10 @@ function diffPair(local, remote) {
   };
 }
 
+function compareAssets(source, target) {
+  return diffPair(source, target);
+}
+
 function summarizePairs(pairs) {
   return pairs.reduce((summary, pair) => {
     summary.total += 1;
@@ -121,5 +125,8 @@ function diffAssets(localAssets, remoteAssets) {
 }
 
 module.exports = {
+  stableStringify,
+  semanticFingerprint,
+  compareAssets,
   diffAssets,
 };

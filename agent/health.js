@@ -42,6 +42,7 @@ function evaluateAssetHealth(asset, options = {}) {
   const issues = [];
   const isLocalEnvironment = options.isLocalEnvironment !== false;
   const filePath = asset.filePath || '';
+  const runtime = asset.type === 'mcp' ? options.runtime || asset.runtime || null : null;
 
   if (!asset.providers || asset.providers.length === 0) {
     issues.push(makeIssue('warning', 'missing_providers', 'Asset has no detected providers.'));
@@ -79,6 +80,15 @@ function evaluateAssetHealth(asset, options = {}) {
         }
       }
     }
+  }
+
+  if (runtime && runtime.status && runtime.status !== 'unknown') {
+    const level = runtime.status === 'broken' ? 'blocking' : 'warning';
+    issues.push(makeIssue(
+      level,
+      `runtime_${runtime.reasonCode || 'check'}`,
+      runtime.summary || 'Runtime MCP diagnostics reported an issue.'
+    ));
   }
 
   const hasBlocking = issues.some((entry) => entry.level === 'blocking');

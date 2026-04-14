@@ -9,7 +9,25 @@ struct AssetDetailView: View {
     @State private var originalContent = ""
     @State private var isLoadingContent = true
     @State private var connections: [String: ConnectionInfo] = [:]
+    @State private var mcpRuntime: McpRuntimeCheck?
+    @State private var runtimeError: String?
+    @State private var isCheckingRuntime = false
+    @State private var remediations: [RemediationSuggestion] = []
+    @State private var isLoadingRemediations = false
+    @State private var applyingRemediationID: String?
     @State private var showDeleteConfirm = false
+    @State private var sourceOfTruthBusyAssetID: String?
+
+    private var dependency: AssetDependencyInfo? {
+        asset.dependency
+    }
+
+    private var readOnlyReason: String? {
+        store.readOnlyReason(
+            environmentId: asset.environment_id,
+            environmentName: store.auditPolicy(environmentId: asset.environment_id)?.name
+        )
+    }
 
     var hasUnsavedChanges: Bool {
         !isLoadingContent && !content.isEmpty && content != originalContent
@@ -19,10 +37,22 @@ struct AssetDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header
+                if let readOnlyReason {
+                    Text(readOnlyReason + " Edit, connect, delete, and source-of-truth actions are disabled.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                }
                 metadataSection
                 capabilitySection
+                driftSection
+                dependencySection
                 topologySection
                 healthSection
+                remediationSection
+                runtimeSection
                 connectionsSection
                 depsSection
                 editorSection
@@ -34,6 +64,7 @@ struct AssetDetailView: View {
                 if hasEditableContent && hasUnsavedChanges {
                     Button("Save") { Task { await save() } }
                         .keyboardShortcut("s", modifiers: .command)
+                        .disabled(store.globalReadOnly)
                 }
             }
             ToolbarItem {
@@ -42,17 +73,27 @@ struct AssetDetailView: View {
                 } label: {
                     Image(systemName: "trash")
                 }
-                .disabled(!asset.canDelete)
+                .disabled(store.globalReadOnly || !asset.canDelete)
             }
         }
         .alert("Delete \(asset.name)?", isPresented: $showDeleteConfirm) {
             Button("Cancel", role: .cancel) {}
             Button("Delete", role: .destructive) { Task { await deleteAsset() } }
         } message: {
-            Text("This will permanently delete the asset file.")
+            if let dependency, dependency.consumerCount > 0 {
+                Text("This will permanently delete the asset file. It also affects \(dependency.consumerCount) downstream consumers across assets, running agents, and provider connections.")
+            } else {
+                Text("This will permanently delete the asset file.")
+            }
         }
         .task { await loadContent() }
         .task { await loadConnections() }
+        .task(id: "\(asset.id)|\(asset.runtime?.checkedAt ?? "none")") {
+            syncRuntimeFromAsset()
+        }
+        .task(id: remediationTaskKey) {
+            await loadRemediations()
+        }
     }
 
     // MARK: - Sections
@@ -168,9 +209,202 @@ struct AssetDetailView: View {
     }
 
     @ViewBuilder
+    private var driftSection: some View {
+        if let drift = asset.drift, let group = store.driftGroup(for: asset.id) {
+            GroupBox("Drift Map") {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(group.summary)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text("\(group.copyCount) copies")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                        Spacer()
+                        Text(drift.status.label)
+                            .font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(drift.status.tint.opacity(0.12), in: Capsule())
+                            .foregroundStyle(drift.status.tint)
+                    }
+
+                    ForEach(group.members) { member in
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(alignment: .top) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    HStack(spacing: 6) {
+                                        Text(member.name)
+                                            .font(.caption.monospaced())
+                                        Text(member.locationLabel)
+                                            .font(.caption2)
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 2)
+                                            .background(.quaternary, in: Capsule())
+                                            .foregroundStyle(.secondary)
+                                    }
+
+                                    Text(member.summary)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+
+                                    if let filePath = member.filePath, !filePath.isEmpty {
+                                        Text(filePath)
+                                            .font(.caption2.monospaced())
+                                            .foregroundStyle(.tertiary)
+                                            .textSelection(.enabled)
+                                    }
+                                }
+
+                                Spacer(minLength: 12)
+
+                                VStack(alignment: .trailing, spacing: 6) {
+                                    Text(member.status.label)
+                                        .font(.caption2.weight(.semibold))
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 3)
+                                        .background(member.status.tint.opacity(0.12), in: Capsule())
+                                        .foregroundStyle(member.status.tint)
+
+                                    if let projectId = member.projectId {
+                                        Button("Open Project") {
+                                            store.focusProject(projectId)
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .controlSize(.small)
+                                    } else if member.environmentType == "remote", let environmentId = member.environmentId {
+                                        Button("Open Server Diff") {
+                                            store.focusServer(environmentId)
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .controlSize(.small)
+                                    }
+
+                                    if !member.sourceOfTruth {
+                                        Button(sourceOfTruthBusyAssetID == member.assetId ? "Updating…" : "Make Source") {
+                                            Task { await makeSourceOfTruth(groupKey: group.key, assetId: member.assetId) }
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .controlSize(.small)
+                                        .disabled(store.globalReadOnly || sourceOfTruthBusyAssetID != nil)
+                                    }
+                                }
+                            }
+
+                            if !member.reasons.isEmpty {
+                                FlowLayout(spacing: 4) {
+                                    ForEach(member.reasons) { reason in
+                                        Text(reason.message)
+                                            .font(.caption2)
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 2)
+                                            .background(Color.orange.opacity(0.12), in: Capsule())
+                                            .foregroundStyle(.orange)
+                                    }
+                                }
+                            }
+                        }
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var dependencySection: some View {
+        if let dependency {
+            GroupBox("Dependency Graph") {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(dependency.summary)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            if dependency.orphaned {
+                                Text("Unused asset")
+                                    .font(.caption2.weight(.semibold))
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 3)
+                                    .background(Color.red.opacity(0.12), in: Capsule())
+                                    .foregroundStyle(.red)
+                            }
+                        }
+                        Spacer()
+                    }
+
+                    HStack(spacing: 8) {
+                        dependencyMetric("Deps", value: dependency.dependencyCount, tint: .purple)
+                        dependencyMetric("Consumers", value: dependency.consumerCount, tint: .green)
+                        dependencyMetric("Assets", value: dependency.assetConsumerCount, tint: .blue)
+                        dependencyMetric("Agents", value: dependency.runtimeConsumerCount, tint: .orange)
+                        dependencyMetric("Providers", value: dependency.providerConsumerCount, tint: .secondary)
+                    }
+
+                    if !dependency.dependsOn.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Depends On")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            FlowLayout(spacing: 4) {
+                                ForEach(dependency.dependsOn) { ref in
+                                    topologyPill(ref.name, tint: .purple)
+                                }
+                            }
+                        }
+                    }
+
+                    if !dependency.dependedOnBy.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Used By Assets")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            FlowLayout(spacing: 4) {
+                                ForEach(dependency.dependedOnBy) { ref in
+                                    topologyPill(ref.name, tint: .green)
+                                }
+                            }
+                        }
+                    }
+
+                    if !dependency.runtimeConsumers.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Running Agents")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            FlowLayout(spacing: 4) {
+                                ForEach(dependency.runtimeConsumers) { consumer in
+                                    topologyPill("\(consumer.name) · \(consumer.state)", tint: .orange)
+                                }
+                            }
+                        }
+                    }
+
+                    if !dependency.providerConsumers.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Provider Targets")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            FlowLayout(spacing: 4) {
+                                ForEach(dependency.providerConsumers) { consumer in
+                                    topologyPill("\(consumer.name) · \(consumer.state)", tint: .secondary)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
     private var topologySection: some View {
         let snapshot = store.assetTopologySnapshot(assetId: asset.id)
-        if !snapshot.environments.isEmpty || !snapshot.projects.isEmpty || !snapshot.providers.isEmpty || !snapshot.dependsOn.isEmpty || !snapshot.dependedOnBy.isEmpty {
+        if !snapshot.environments.isEmpty || !snapshot.projects.isEmpty || !snapshot.providers.isEmpty || !snapshot.dependsOn.isEmpty || !snapshot.dependedOnBy.isEmpty || !snapshot.runtimeConsumers.isEmpty {
             GroupBox("Topology") {
                 VStack(alignment: .leading, spacing: 12) {
                     if !snapshot.environments.isEmpty {
@@ -238,6 +472,19 @@ struct AssetDetailView: View {
                             }
                         }
                     }
+
+                    if !snapshot.runtimeConsumers.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Running Agents")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            FlowLayout(spacing: 4) {
+                                ForEach(snapshot.runtimeConsumers, id: \.self) { link in
+                                    topologyPill("\(link.node.label) · \(link.edge.label ?? "loaded")", tint: .orange)
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -260,6 +507,167 @@ struct AssetDetailView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(8)
                         .background((issue.level == "blocking" ? Color.red : Color.orange).opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var remediationSection: some View {
+        if isLoadingRemediations || !remediations.isEmpty {
+            GroupBox("Suggested Fixes") {
+                VStack(alignment: .leading, spacing: 10) {
+                    if isLoadingRemediations {
+                        ProgressView()
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        ForEach(remediations) { suggestion in
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack(alignment: .top, spacing: 8) {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        HStack(spacing: 6) {
+                                            Text(suggestion.title)
+                                                .font(.caption.weight(.semibold))
+                                            Text(suggestion.category.replacingOccurrences(of: "_", with: " ").capitalized)
+                                                .font(.caption2.weight(.semibold))
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 2)
+                                                .background(.quaternary, in: Capsule())
+                                                .foregroundStyle(.secondary)
+                                            if suggestion.risky {
+                                                Text("Risky")
+                                                    .font(.caption2.weight(.semibold))
+                                                    .padding(.horizontal, 6)
+                                                    .padding(.vertical, 2)
+                                                    .background(Color.orange.opacity(0.12), in: Capsule())
+                                                    .foregroundStyle(.orange)
+                                            }
+                                        }
+
+                                        Text(suggestion.summary)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+
+                                        if !suggestion.details.isEmpty {
+                                            VStack(alignment: .leading, spacing: 3) {
+                                                ForEach(Array(suggestion.details.enumerated()), id: \.offset) { entry in
+                                                    Text(entry.element)
+                                                        .font(.caption2)
+                                                        .foregroundStyle(.tertiary)
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    Spacer()
+
+                                    if suggestion.canApply {
+                                        Button(applyingRemediationID == suggestion.id ? "Applying…" : (suggestion.applyLabel ?? "Apply")) {
+                                            Task { await applyRemediation(suggestion) }
+                                        }
+                                        .buttonStyle(.borderedProminent)
+                                        .controlSize(.small)
+                                        .disabled(readOnlyReason != nil || applyingRemediationID != nil)
+                                    } else {
+                                        Text("Guided")
+                                            .font(.caption2.weight(.semibold))
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 3)
+                                            .background(.quaternary, in: Capsule())
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                            .padding(10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var runtimeSection: some View {
+        if asset.type == .mcp {
+            GroupBox("Runtime Check") {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(mcpRuntime?.summary ?? "Runtime check has not been run yet.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            if let runtime = mcpRuntime {
+                                Text(runtimeMetadata(runtime))
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+
+                        Spacer()
+
+                        VStack(alignment: .trailing, spacing: 8) {
+                            Text((mcpRuntime?.statusLabel ?? "Unknown").uppercased())
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle((mcpRuntime?.statusTint ?? .secondary))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background((mcpRuntime?.statusTint ?? .secondary).opacity(0.12), in: Capsule())
+
+                            Button(isCheckingRuntime ? "Checking…" : (mcpRuntime == nil || mcpRuntime?.status == "unknown" ? "Run Check" : "Refresh Check")) {
+                                Task { await runRuntimeCheck() }
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(!asset.canInspectMcpTools || isCheckingRuntime)
+                        }
+                    }
+
+                    if let runtimeError, !runtimeError.isEmpty {
+                        Text(runtimeError)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .padding(8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                    }
+
+                    if let runtime = mcpRuntime, !runtime.details.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(Array(runtime.details.enumerated()), id: \.offset) { entry in
+                                Text(entry.element)
+                                    .font(.caption)
+                                    .foregroundStyle(.primary)
+                                    .padding(8)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+                            }
+                        }
+                    }
+
+                    if let runtime = mcpRuntime, !runtime.tools.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("\(runtime.tools.count) Tools Available")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+
+                            ForEach(runtime.tools) { tool in
+                                HStack(alignment: .top, spacing: 8) {
+                                    Text(tool.name)
+                                        .font(.caption.monospaced())
+                                        .foregroundStyle(.green)
+                                    Text(tool.description)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .padding(8)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+                            }
+                        }
                     }
                 }
             }
@@ -318,14 +726,14 @@ struct AssetDetailView: View {
                                         Task { await toggleConnection(tool: entry.provider, connect: false) }
                                     }
                                     .controlSize(.small)
-                                    .disabled(!asset.canConnect)
+                                    .disabled(store.globalReadOnly || !asset.canConnect)
                                 } else {
                                     Button(entry.state == .invalid ? entry.state.label : "Connect") {
                                         Task { await toggleConnection(tool: entry.provider, connect: true) }
                                     }
                                     .controlSize(.small)
                                     .buttonStyle(.borderedProminent)
-                                    .disabled(isUnavailable)
+                                    .disabled(store.globalReadOnly || isUnavailable)
                                 }
                             }
                             .font(.caption)
@@ -372,8 +780,32 @@ struct AssetDetailView: View {
             .foregroundStyle(tint)
     }
 
+    private func dependencyMetric(_ label: String, value: Int, tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("\(value)")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(tint)
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(tint.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+    }
+
     private var hasEditableContent: Bool {
         asset.canEdit
+    }
+
+    private var remediationTaskKey: String {
+        [
+            asset.id,
+            asset.type.rawValue,
+            asset.health?.summary ?? "no-health",
+            asset.runtime?.checkedAt ?? "no-runtime",
+            asset.drift?.status.rawValue ?? "no-drift"
+        ].joined(separator: "|")
     }
 
     @ViewBuilder
@@ -401,6 +833,7 @@ struct AssetDetailView: View {
                             Button("Save") { Task { await save() } }
                                 .controlSize(.small)
                                 .buttonStyle(.borderedProminent)
+                                .disabled(store.globalReadOnly)
                         }
                     }
                 }
@@ -444,7 +877,114 @@ struct AssetDetailView: View {
         }
     }
 
+    private func syncRuntimeFromAsset() {
+        guard asset.type == .mcp else {
+            mcpRuntime = nil
+            runtimeError = nil
+            return
+        }
+        mcpRuntime = asset.runtime
+        runtimeError = nil
+    }
+
+    private func loadRemediations() async {
+        isLoadingRemediations = true
+        defer { isLoadingRemediations = false }
+
+        do {
+            remediations = try await api.fetchAssetRemediations(assetId: asset.id, type: asset.type)
+        } catch {
+            remediations = []
+        }
+    }
+
+    private func runtimeMetadata(_ runtime: McpRuntimeCheck) -> String {
+        var segments: [String] = [runtime.transport.uppercased()]
+        if let checkedAt = runtime.checkedAt,
+           let date = ISO8601DateFormatter().date(from: checkedAt) {
+            segments.append("Checked \(DateFormatter.localizedString(from: date, dateStyle: .short, timeStyle: .short))")
+        }
+        if let durationMs = runtime.durationMs {
+            segments.append("\(durationMs) ms")
+        }
+        if let toolCount = runtime.toolCount {
+            segments.append("\(toolCount) tools")
+        }
+        if runtime.cached {
+            segments.append(runtime.stale ? "cached (stale)" : "cached")
+        }
+        segments.append(runtime.reachable ? "reachable" : "unreachable")
+        return segments.joined(separator: " · ")
+    }
+
+    private func runRuntimeCheck() async {
+        guard asset.canInspectMcpTools else {
+            store.showToast(asset.health?.summary ?? "Runtime check is unavailable for this asset")
+            return
+        }
+
+        isCheckingRuntime = true
+        defer { isCheckingRuntime = false }
+
+        do {
+            let runtime = try await api.runMcpRuntimeCheck(assetId: asset.id)
+            mcpRuntime = runtime
+            runtimeError = nil
+            store.showToast(runtime.summary)
+            await store.loadAll(api: api)
+            await loadRemediations()
+        } catch {
+            runtimeError = error.localizedDescription
+            store.showToast(error.localizedDescription.isEmpty ? "Runtime check failed" : error.localizedDescription)
+        }
+    }
+
+    private func confirmRiskyRemediation(_ suggestion: RemediationSuggestion) -> Bool {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Apply risky fix?"
+        alert.informativeText = ([suggestion.summary] + suggestion.details).joined(separator: "\n")
+        alert.addButton(withTitle: suggestion.applyLabel ?? "Apply")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    private func applyRemediation(_ suggestion: RemediationSuggestion) async {
+        guard readOnlyReason == nil else {
+            store.showToast(readOnlyReason ?? "Read-only audit mode is enabled")
+            return
+        }
+        guard suggestion.canApply, applyingRemediationID == nil else { return }
+        if suggestion.risky && !confirmRiskyRemediation(suggestion) {
+            return
+        }
+
+        applyingRemediationID = suggestion.id
+        defer { applyingRemediationID = nil }
+
+        do {
+            _ = try await api.applyAssetRemediation(
+                assetId: asset.id,
+                remediationId: suggestion.id,
+                type: asset.type,
+                confirmRisk: suggestion.risky,
+                approval: .client("macos", note: suggestion.risky ? "Approved risky asset remediation" : "Approved asset remediation")
+            )
+            store.showToast(suggestion.applyLabel ?? "Fix applied")
+            await store.loadAll(api: api)
+            await loadRemediations()
+            await loadContent()
+            await loadConnections()
+        } catch {
+            store.showToast(error.localizedDescription.isEmpty ? "Failed to apply suggested fix" : error.localizedDescription)
+        }
+    }
+
     private func save() async {
+        guard !store.globalReadOnly else {
+            store.showToast(readOnlyReason ?? "Read-only audit mode is enabled")
+            return
+        }
         do {
             try await api.updateAssetContent(assetId: asset.id, content: content, type: asset.type)
             originalContent = content
@@ -455,6 +995,10 @@ struct AssetDetailView: View {
     }
 
     private func toggleConnection(tool: String, connect: Bool) async {
+        guard !store.globalReadOnly else {
+            store.showToast(readOnlyReason ?? "Read-only audit mode is enabled")
+            return
+        }
         guard asset.canConnect else {
             store.showToast(asset.health?.summary ?? "Connections are unavailable for this asset")
             return
@@ -473,6 +1017,10 @@ struct AssetDetailView: View {
     }
 
     private func deleteAsset() async {
+        guard !store.globalReadOnly else {
+            store.showToast(readOnlyReason ?? "Read-only audit mode is enabled")
+            return
+        }
         guard asset.canDelete else {
             store.showToast("Delete is unavailable for this asset")
             return
@@ -484,6 +1032,25 @@ struct AssetDetailView: View {
             await store.loadAll(api: api)
         } catch {
             store.showToast("Delete failed: \(error.localizedDescription)")
+        }
+    }
+
+    @MainActor
+    private func makeSourceOfTruth(groupKey: String, assetId: String) async {
+        guard !store.globalReadOnly else {
+            store.showToast(readOnlyReason ?? "Read-only audit mode is enabled")
+            return
+        }
+        guard sourceOfTruthBusyAssetID == nil else { return }
+        sourceOfTruthBusyAssetID = assetId
+        defer { sourceOfTruthBusyAssetID = nil }
+
+        do {
+            _ = try await api.setSourceOfTruth(groupKey: groupKey, assetId: assetId)
+            store.showToast("Source of truth updated")
+            await store.loadAll(api: api)
+        } catch {
+            store.showToast("Failed to update source of truth: \(error.localizedDescription)")
         }
     }
 }

@@ -46,6 +46,55 @@ function buildTopology({
     edges.push(edge);
   };
 
+  const ensureAssetNode = (assetLike) => {
+    const assetId = assetLike?.id || assetLike?.assetId;
+    if (!assetId) return null;
+    const assetNodeId = topologyNodeId('asset', assetId);
+    if (!nodeMap.has(assetNodeId)) {
+      addNode({
+        id: assetNodeId,
+        kind: 'asset',
+        label: assetLike.name || assetId,
+        subtitle: assetLike.desc || assetLike.detail || assetLike.filePath || assetLike.projectPath || '',
+        assetId,
+        assetType: assetLike.type || assetLike.assetType || null,
+        environmentId: assetLike.environmentId || assetLike.environment_id || null,
+        projectId: assetLike.projectId || null,
+        status: assetLike.health?.status || 'ok',
+        badges: assetLike.isOrchestrator ? ['orchestrator'] : [],
+        summary: {
+          warningCount: assetLike.health?.status === 'warning' ? 1 : 0,
+          brokenCount: assetLike.health?.status === 'broken' ? 1 : 0,
+        },
+      });
+    }
+
+    const environmentId = assetLike.environmentId || assetLike.environment_id || null;
+    if (environmentId && environmentsById.has(environmentId)) {
+      const environment = environmentsById.get(environmentId);
+      addEdge({
+        id: topologyEdgeId('discovered_on', assetNodeId, topologyNodeId(environment.type === 'local' ? 'machine' : 'remote_server', environmentId)),
+        kind: 'discovered_on',
+        from: assetNodeId,
+        to: topologyNodeId(environment.type === 'local' ? 'machine' : 'remote_server', environmentId),
+        label: 'discovered on',
+      });
+    }
+
+    const projectId = assetLike.projectId || null;
+    if (projectId && projectsById.has(projectId)) {
+      addEdge({
+        id: topologyEdgeId('belongs_to_project', assetNodeId, topologyNodeId('project', projectId)),
+        kind: 'belongs_to_project',
+        from: assetNodeId,
+        to: topologyNodeId('project', projectId),
+        label: 'belongs to project',
+      });
+    }
+
+    return assetNodeId;
+  };
+
   for (const environment of environments) {
     addNode({
       id: topologyNodeId(environment.type === 'local' ? 'machine' : 'remote_server', environment.id),
@@ -126,22 +175,10 @@ function buildTopology({
   const providerProjects = new Map();
 
   for (const asset of assets) {
-    const assetNodeId = topologyNodeId('asset', asset.id);
-    addNode({
-      id: assetNodeId,
-      kind: 'asset',
-      label: asset.name,
-      subtitle: asset.desc || asset.filePath || '',
-      assetId: asset.id,
-      assetType: asset.type,
+    const assetNodeId = ensureAssetNode({
+      ...asset,
+      id: asset.id,
       environmentId: asset.environment_id || null,
-      projectId: null,
-      status: asset.health?.status || 'ok',
-      badges: asset.isOrchestrator ? ['orchestrator'] : [],
-      summary: {
-        warningCount: asset.health?.status === 'warning' ? 1 : 0,
-        brokenCount: asset.health?.status === 'broken' ? 1 : 0,
-      },
     });
 
     if (asset.environment_id && environmentsById.has(asset.environment_id)) {
@@ -226,15 +263,29 @@ function buildTopology({
   for (const agent of runningAgents) {
     const environment = matchEnvironmentForAgent(agent, environments, localEnvironmentId);
     const agentNodeId = topologyNodeId('running_agent', agent.id);
+    const introspection = agent.introspection || null;
+    const activeCount = introspection?.activeCount || 0;
+    const loadedCount = introspection?.loadedCount || 0;
+    const configuredCount = introspection?.configuredCount || 0;
     addNode({
       id: agentNodeId,
       kind: 'running_agent',
       label: agent.name,
       subtitle: agent.url,
       environmentId: environment?.id || null,
-      status: agent.is_active === 0 ? 'inactive' : 'active',
-      badges: [agent.protocol || 'mcp'].filter(Boolean),
-      summary: {},
+      status: introspection?.status || (agent.is_active === 0 ? 'inactive' : 'active'),
+      badges: [
+        agent.protocol || 'mcp',
+        introspection?.status === 'ok' ? 'introspected' : null,
+      ].filter(Boolean),
+      summary: {
+        activeCount,
+        configuredCount,
+        warningCount: introspection?.status === 'warning' ? 1 : 0,
+        brokenCount: introspection?.status === 'broken' ? 1 : 0,
+        relatedCount: introspection?.toolCount || 0,
+        assetCount: activeCount + loadedCount + configuredCount,
+      },
     });
 
     if (environment) {
@@ -244,6 +295,20 @@ function buildTopology({
         from: agentNodeId,
         to: topologyNodeId(environment.type === 'local' ? 'machine' : 'remote_server', environment.id),
         label: 'runs on',
+      });
+    }
+
+    const introspectedAssets = Array.isArray(introspection?.assets) ? introspection.assets : [];
+    for (const runtimeAsset of introspectedAssets) {
+      if (!['loaded', 'active'].includes(runtimeAsset.state)) continue;
+      const assetNodeId = ensureAssetNode(runtimeAsset);
+      if (!assetNodeId) continue;
+      addEdge({
+        id: topologyEdgeId('loaded_by', assetNodeId, agentNodeId, runtimeAsset.state),
+        kind: 'loaded_by',
+        from: assetNodeId,
+        to: agentNodeId,
+        label: runtimeAsset.state,
       });
     }
   }
@@ -403,15 +468,28 @@ function applyNodeSummaries({
     }
 
     if (node.kind === 'running_agent') {
-      summary.projectCount = 0;
-      summary.providerCount = 0;
+      summary.projectCount = summary.projectCount || 0;
+      summary.providerCount = summary.providerCount || 0;
     }
 
     if (node.kind === 'asset') {
       const outgoingProviders = edges.filter((edge) => edge.from === node.id && edge.kind === 'targets_provider').length;
       const outgoingDeps = edges.filter((edge) => edge.from === node.id && edge.kind === 'depends_on').length;
+      const incomingDeps = edges.filter((edge) => edge.to === node.id && edge.kind === 'depends_on').length;
+      const runtimeConsumers = edges.filter((edge) => edge.from === node.id && edge.kind === 'loaded_by').length;
+      const providerConsumers = edges.filter((edge) =>
+        edge.from === node.id
+        && edge.kind === 'targets_provider'
+        && ['active', 'configured'].includes(edge.state)
+      ).length;
+      const consumerCount = incomingDeps + runtimeConsumers + providerConsumers;
       summary.providerCount = outgoingProviders;
       summary.dependencyCount = outgoingDeps;
+      summary.assetConsumerCount = incomingDeps;
+      summary.runtimeConsumerCount = runtimeConsumers;
+      summary.providerConsumerCount = providerConsumers;
+      summary.consumerCount = consumerCount;
+      summary.orphaned = consumerCount === 0;
       summary.projectCount = edges.some((edge) => edge.kind === 'belongs_to_project' && edge.from === node.id) ? 1 : 0;
     }
 
@@ -432,4 +510,5 @@ function applyNodeSummaries({
 
 module.exports = {
   buildTopology,
+  matchEnvironmentForAgent,
 };

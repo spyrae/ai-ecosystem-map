@@ -1,38 +1,83 @@
-interface AEMLogoProps {
+interface HCPLogoProps {
   height?: number;
   className?: string;
-  mono?: boolean; // true = all white, false = brand colors
+  mono?: boolean;
+  showText?: boolean;
 }
 
-export function AEMLogo({ height = 20, className = '', mono = false }: AEMLogoProps) {
-  const w = (334 / 153) * height; // aspect ratio from the original
+/*
+ * Network graph inside an octagon — nodes connected by edges,
+ * inspired by the Brandmark reference icon.
+ */
+export function AEMLogo({ height = 22, className = '', mono = false, showText = false }: HCPLogoProps) {
+  const color = mono ? 'currentColor' : '#c4a55a';
+  const w = height;
+
+  // Octagon vertices (r=46, center 50,50)
+  const oct = [
+    [50, 4], [82.5, 17.5], [96, 50], [82.5, 82.5],
+    [50, 96], [17.5, 82.5], [4, 50], [17.5, 17.5],
+  ];
+  const octPath = oct.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p[0]},${p[1]}`).join(' ') + ' Z';
+
+  // Inner pentagon nodes (r=30, center 50,50, rotated -90° so top vertex points up)
+  const inner = Array.from({ length: 5 }, (_, i) => {
+    const a = (Math.PI * 2 * i) / 5 - Math.PI / 2;
+    return [+(50 + 30 * Math.cos(a)).toFixed(1), +(50 + 30 * Math.sin(a)).toFixed(1)] as [number, number];
+  });
+
+  // Edges: center to each inner, each inner to next, each inner to octagon
+  const cx = 50, cy = 50;
 
   return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      viewBox="335 300 354 170"
-      width={w}
-      height={height}
-      className={className}
-    >
-      {/* A */}
-      <path
-        d="m 463.68462,0 h 0.72 c 0.21601,0 0.36001,-0.144 0.36001,-0.36 v -19.584 h 19.368 V -0.36 c 0.072,0.216 0.21599,0.36 0.43199,0.36 h 0.72 c 0.21601,0 0.36001,-0.144 0.28801,-0.36 v -37.944 c -0.072,-7.56 -4.536,-12.6 -11.16001,-12.6 -6.62399,0 -11.08799,5.04 -11.08799,12.6 V -0.36 c 0,0.216 0.14399,0.36 0.35999,0.36 z m 1.08001,-21.312 v -16.992 c 0,-6.84 3.88799,-11.232 9.64799,-11.232 5.976,0 9.72001,4.392 9.72001,11.232 v 16.992 z"
-        fill={mono ? 'currentColor' : '#cea66f'}
-        transform="translate(0 359.236) translate(344.93001500000014 -51.808000000000014) scale(3) translate(-463.32463 50.904)"
-      />
-      {/* E */}
-      <path
-        d="m 506.38963,0.144 h 6.48 c 0.216,0 0.35999,-0.144 0.35999,-0.36 v -0.648 c 0,-0.216 -0.14399,-0.36 -0.35999,-0.36 h -6.48 c -6.048,0 -9.72001,-4.32 -9.72001,-10.512 v -13.248 h 14.76 c 0.216,0 0.36,-0.144 0.36,-0.36 v -0.648 c 0,-0.216 -0.144,-0.36 -0.36,-0.36 h -14.76 v -12.312 c 0,-6.192 3.67201,-10.512 9.72001,-10.512 h 6.48 c 0.216,0 0.35999,-0.144 0.35999,-0.36 v -0.648 c 0,-0.216 -0.14399,-0.36 -0.35999,-0.36 h -6.48 c -6.91201,0 -11.16001,5.04 -11.16001,11.88 v 26.928 c 0,6.84 4.248,11.88 11.16001,11.88 z"
-        fill={mono ? 'currentColor' : '#9c6d65'}
-        transform="translate(0 359.236) translate(461.64498500000013 -50.728) scale(3) translate(-495.22962 50.544)"
-      />
-      {/* M */}
-      <path
-        d="m 550.55263,-50.904 c -4.39201,0 -7.84801,3.096 -9.288,7.344 -1.44001,-4.248 -4.96801,-7.344 -9.288,-7.344 -6.33601,0 -10.15201,5.184 -10.15201,11.88 V -0.36 c 0,0.216 0.144,0.36 0.36,0.36 h 0.72 c 0.21601,0 0.36001,-0.144 0.36001,-0.36 v -38.664 c 0,-6.048 3.24,-10.512 8.712,-10.512 5.03999,0 8.56799,4.68 8.56799,10.512 V -0.36 c 0,0.216 0.144,0.36 0.36,0.36 h 0.72001 c 0.216,0 0.36,-0.144 0.36,-0.36 v -38.664 c 0,-5.832 3.59999,-10.512 8.568,-10.512 5.544,0 8.712,4.464 8.712,10.512 V -0.36 c 0,0.216 0.144,0.36 0.36,0.36 h 0.71999 c 0.216,0 0.36,-0.144 0.36,-0.36 v -38.664 c 0,-6.696 -3.88799,-11.88 -10.15199,-11.88 z"
-        fill={mono ? 'currentColor' : '#6a335a'}
-        transform="translate(0 359.236) translate(562.4299849999999 -51.808000000000014) scale(3) translate(-521.82462 50.904)"
-      />
-    </svg>
+    <div className={`flex items-center gap-2.5 ${className}`}>
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 100 100"
+        width={w}
+        height={w}
+        fill="none"
+        stroke={color}
+        strokeWidth="2.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        {/* Octagon */}
+        <path d={octPath} />
+
+        {/* Spokes: center → inner nodes */}
+        {inner.map((p, i) => (
+          <line key={`spoke-${i}`} x1={cx} y1={cy} x2={p[0]} y2={p[1]} />
+        ))}
+
+        {/* Pentagon edges: inner node → next inner node */}
+        {inner.map((p, i) => {
+          const next = inner[(i + 1) % 5];
+          return <line key={`pent-${i}`} x1={p[0]} y1={p[1]} x2={next[0]} y2={next[1]} />;
+        })}
+
+        {/* Bridges: inner nodes → nearest octagon vertices */}
+        {inner.map((p, i) => {
+          // Map each inner node to two nearest octagon vertices
+          const octIdx1 = Math.round((i * 8) / 5) % 8;
+          const octIdx2 = (octIdx1 + 1) % 8;
+          return (
+            <g key={`bridge-${i}`}>
+              <line x1={p[0]} y1={p[1]} x2={oct[octIdx1][0]} y2={oct[octIdx1][1]} />
+              <line x1={p[0]} y1={p[1]} x2={oct[octIdx2][0]} y2={oct[octIdx2][1]} />
+            </g>
+          );
+        })}
+
+        {/* Node dots */}
+        <circle cx={cx} cy={cy} r="5" fill={color} stroke="none" />
+        {inner.map((p, i) => (
+          <circle key={`dot-${i}`} cx={p[0]} cy={p[1]} r="3.5" fill={color} stroke="none" />
+        ))}
+      </svg>
+      {showText && (
+        <span className="text-[11px] text-muted whitespace-nowrap">Harness Control Plane</span>
+      )}
+    </div>
   );
 }

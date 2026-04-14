@@ -34,10 +34,10 @@ export function buildUsedByMapFromTopology(topology?: TopologyGraph | null) {
     if (edge.kind !== 'depends_on') continue;
     const source = nodesById.get(edge.from);
     const target = nodesById.get(edge.to);
-    if (!source || !target) continue;
-    if (!usedByMap[target.label]) usedByMap[target.label] = [];
-    if (!usedByMap[target.label].includes(source.label)) {
-      usedByMap[target.label].push(source.label);
+    if (!source || !target?.assetId) continue;
+    if (!usedByMap[target.assetId]) usedByMap[target.assetId] = [];
+    if (!usedByMap[target.assetId].includes(source.label)) {
+      usedByMap[target.assetId].push(source.label);
     }
   }
   return usedByMap;
@@ -51,6 +51,7 @@ export function getAssetTopology(topology: TopologyGraph | null | undefined, ass
       providerLinks: [] as { node: TopologyNode; edge: TopologyEdge }[],
       dependsOn: [] as TopologyNode[],
       dependedOnBy: [] as TopologyNode[],
+      runtimeConsumers: [] as { node: TopologyNode; edge: TopologyEdge }[],
     };
   }
 
@@ -78,6 +79,10 @@ export function getAssetTopology(topology: TopologyGraph | null | undefined, ass
       .filter((edge) => edge.kind === 'depends_on')
       .map((edge) => nodesById.get(edge.from))
       .filter(Boolean) as TopologyNode[],
+    runtimeConsumers: (edgesByFrom.get(assetNodeId) || [])
+      .filter((edge) => edge.kind === 'loaded_by')
+      .map((edge) => ({ edge, node: nodesById.get(edge.to) }))
+      .filter((item): item is { edge: TopologyEdge; node: TopologyNode } => Boolean(item.node)),
   };
 }
 

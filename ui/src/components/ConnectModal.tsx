@@ -6,6 +6,7 @@ import { fetchConnections, connectAsset, disconnectAsset } from '../lib/api';
 interface ConnectModalProps {
   asset: Asset | null;
   onClose: () => void;
+  readOnly?: boolean;
 }
 
 type ConnectionState = Record<string, ConnectionInfo & { loading?: boolean }>;
@@ -22,7 +23,7 @@ const PROVIDER_COLORS: Record<string, string> = {
 
 const TOOL_ORDER: Provider[] = ['claude', 'codex', 'gemini', 'cursor', 'windsurf', 'copilot', 'continue_dev'];
 
-export function ConnectModal({ asset, onClose }: ConnectModalProps) {
+export function ConnectModal({ asset, onClose, readOnly = false }: ConnectModalProps) {
   const [connections, setConnections] = useState<ConnectionState>({});
   const [toast, setToast] = useState<string | null>(null);
   const hasLoadedConnections = Object.keys(connections).length > 0;
@@ -102,6 +103,12 @@ export function ConnectModal({ asset, onClose }: ConnectModalProps) {
             Choose which tools should have access to this {asset.type}
           </p>
 
+          {readOnly && (
+            <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[12px] text-amber-300">
+              Global read-only audit mode is enabled. Connection changes are disabled.
+            </div>
+          )}
+
           {/* Tool list */}
           <div className="space-y-1.5">
             {!hasLoadedConnections && (
@@ -165,7 +172,7 @@ export function ConnectModal({ asset, onClose }: ConnectModalProps) {
                   ) : (
                     <button
                       onClick={() => handleToggle(tool)}
-                      disabled={conn.loading || isUnavailable}
+                      disabled={readOnly || conn.loading || isUnavailable}
                       className={`px-3.5 py-1.5 rounded-md border text-xs font-medium transition-all ${
                         conn.connected
                           ? 'border-green text-green hover:border-red hover:text-red'

@@ -18,12 +18,16 @@ export function SyncPlanModal({
   title,
   onApply,
   onClose,
+  readOnly = false,
+  readOnlyReason,
 }: {
   plan: SyncPlan | null;
   applying: boolean;
   title: string;
   onApply: () => void;
   onClose: () => void;
+  readOnly?: boolean;
+  readOnlyReason?: string;
 }) {
   if (!plan) {
     return (
@@ -67,6 +71,19 @@ export function SyncPlanModal({
         </div>
 
         <div className="p-5 space-y-4 max-h-[70vh] overflow-y-auto">
+          {plan.target?.git && (
+            <div className={`rounded-lg border px-3 py-2 text-sm ${
+              plan.target.git.conflictedCount > 0
+                ? 'border-red/40 bg-red/10 text-red'
+                : plan.target.git.dirty
+                  ? 'border-orange/40 bg-orange/10 text-orange'
+                  : 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300'
+            }`}>
+              <div className="font-medium">Git Target</div>
+              <div className="mt-0.5">{plan.target.git.summary}</div>
+            </div>
+          )}
+
           {plan.issues.length > 0 && (
             <div className="space-y-2">
               {plan.issues.map((entry) => (
@@ -75,6 +92,12 @@ export function SyncPlanModal({
                   <div className="mt-0.5">{entry.message}</div>
                 </div>
               ))}
+            </div>
+          )}
+
+          {readOnly && (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
+              {readOnlyReason || 'Read-only audit mode is enabled. Applying sync is disabled.'}
             </div>
           )}
 
@@ -115,7 +138,7 @@ export function SyncPlanModal({
             </button>
             <button
               onClick={onApply}
-              disabled={applying || !plan.canApply || !plan.hasChanges || blockingIssues.length > 0}
+              disabled={readOnly || applying || !plan.canApply || !plan.hasChanges || blockingIssues.length > 0}
               className="px-4 py-2 text-sm font-medium bg-accent text-bg rounded-lg hover:bg-accent/90 transition-colors disabled:opacity-40"
             >
               {applying ? 'Applying...' : 'Apply Sync'}

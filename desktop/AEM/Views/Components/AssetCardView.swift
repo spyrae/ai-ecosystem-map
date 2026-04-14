@@ -10,6 +10,14 @@ struct AssetCardView: View {
     @Environment(EcosystemStore.self) private var store
     @State private var isHovered = false
 
+    private var consumerCount: Int {
+        asset.dependency?.consumerCount ?? 0
+    }
+
+    private var isOrphaned: Bool {
+        asset.dependency?.orphaned == true
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             // Header: type badge + name
@@ -35,6 +43,24 @@ struct AssetCardView: View {
                         .font(.caption2)
                         .foregroundStyle(health.status == "broken" ? .red : .orange)
                         .help(health.summary)
+                }
+                if isOrphaned {
+                    Text("Unused")
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.red.opacity(0.12), in: Capsule())
+                        .foregroundStyle(.red)
+                        .help(asset.dependency?.summary ?? "This asset has no downstream consumers.")
+                }
+                if let drift = asset.drift {
+                    Text(drift.status.label)
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(drift.status.tint.opacity(0.12), in: Capsule())
+                        .foregroundStyle(drift.status.tint)
+                        .help(drift.summary)
                 }
                 if asset.isOrchestrator {
                     Image(systemName: "arrow.triangle.branch")
@@ -75,6 +101,21 @@ struct AssetCardView: View {
                         }
                     }
                 }
+            }
+
+            if consumerCount > 0, let dependency = asset.dependency {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Consumers")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                    Text(dependency.summary)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
             }
 
             // Provider badges

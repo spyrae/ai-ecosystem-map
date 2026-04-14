@@ -23,6 +23,7 @@ struct AEMApp: App {
             CommandGroup(replacing: .newItem) {
                 Button("New Asset...") { store.showCreate = true }
                     .keyboardShortcut("n", modifiers: .command)
+                    .disabled(store.globalReadOnly)
             }
             CommandGroup(after: .toolbar) {
                 Button("Rescan") { Task { await store.rescan(api: apiClient) } }

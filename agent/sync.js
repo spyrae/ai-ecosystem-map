@@ -3,6 +3,8 @@
 const fs = require('fs');
 const path = require('path');
 const remote = require('./remote');
+const { inspectGitContext } = require('./git');
+const { getConnections, getTargetPath, getMcpConfigPath } = require('./connector');
 const {
   inferProviderFromAsset,
   inferRemoteTargetPath,
@@ -68,6 +70,56 @@ function operation(action, mode, summary, extra = {}) {
 
 function issue(level, code, message) {
   return { level, code, message };
+}
+
+function appendDependencyImpactWarnings(plan, asset, dependencyGraph) {
+  const dependency = dependencyGraph?.byAssetId?.[asset?.id];
+  if (!dependency || dependency.consumerCount === 0) return;
+
+  const parts = [];
+  if (dependency.assetConsumerCount) parts.push(`${dependency.assetConsumerCount} asset dependenc${dependency.assetConsumerCount === 1 ? 'y' : 'ies'}`);
+  if (dependency.runtimeConsumerCount) parts.push(`${dependency.runtimeConsumerCount} running agent${dependency.runtimeConsumerCount === 1 ? '' : 's'}`);
+  if (dependency.providerConsumerCount) parts.push(`${dependency.providerConsumerCount} provider connection${dependency.providerConsumerCount === 1 ? '' : 's'}`);
+
+  plan.issues.push(issue(
+    'warning',
+    'downstream_impact',
+    `This asset is currently used by ${parts.join(', ')}. Applying this sync can affect those downstream consumers.`
+  ));
+}
+
+function applyGitPreflight(plan, projectPath, targetPath, action) {
+  const git = inspectGitContext(projectPath, targetPath);
+  if (!git) return;
+
+  plan.target.git = git;
+  if (action === 'noop') return;
+
+  if (git.conflictedCount > 0) {
+    plan.issues.push(issue(
+      'blocking',
+      'git_conflicts',
+      `Target repo has merge conflicts on branch "${git.branch}". Resolve them before writing project config files.`
+    ));
+    return;
+  }
+
+  if (['conflicted', 'modified', 'staged', 'untracked'].includes(git.relevantStatus || '')) {
+    plan.issues.push(issue(
+      'blocking',
+      'git_target_dirty',
+      `Target path already has uncommitted git changes (${git.relevantStatus}) on branch "${git.branch}". Commit, stash, or discard them first.`
+    ));
+    return;
+  }
+
+  if (git.dirty) {
+    plan.issues.push(issue(
+      'warning',
+      'git_repo_dirty',
+      `Target repo is dirty on branch "${git.branch}" (${git.summary}). Review local changes before applying this sync.`
+    ));
+  }
 }
 
 function extractMcpEntryFromDocument(doc, provider, name) {
@@ -182,6 +234,7 @@ async function previewProjectSync(asset, target, opts) {
         provider: inferProviderFromAsset(asset),
       }
     ));
+    applyGitPreflight(plan, target.projectPath, targetPath, action);
     plan.canApply = true;
     plan.hasChanges = action !== 'noop';
     return plan;
@@ -219,10 +272,122 @@ async function previewProjectSync(asset, target, opts) {
       content: sourceContent,
     }
   ));
+  applyGitPreflight(plan, target.projectPath, targetPath, action);
   plan.canApply = true;
   plan.hasChanges = action !== 'noop';
   if (action === 'update') {
     plan.issues.push(issue('warning', 'target_exists', 'Target already exists and will be replaced'));
+  }
+  return plan;
+}
+
+async function previewProviderSync(assetInput, target) {
+  const asset = enrichLocalMcpAsset(assetInput);
+  const provider = target.provider;
+  const providerProjectRoot = target.projectPath || null;
+  const plan = {
+    source: {
+      assetId: asset.id,
+      name: asset.name,
+      type: asset.type,
+      filePath: asset.filePath || null,
+    },
+    target: {
+      kind: 'provider',
+      label: provider,
+      provider,
+      projectPath: providerProjectRoot,
+    },
+    operations: [],
+    issues: [],
+    canApply: false,
+    hasChanges: false,
+  };
+
+  if (!provider) {
+    plan.issues.push(issue('blocking', 'provider_required', 'Provider target is required'));
+    return plan;
+  }
+
+  const connection = getConnections(
+    asset.filePath || null,
+    asset.type,
+    asset.name,
+    providerProjectRoot,
+    asset.locations || null
+  )[provider];
+
+  if (connection && connection.installed === false) {
+    plan.issues.push(issue(
+      'warning',
+      'provider_not_installed',
+      `${provider} does not appear to be installed locally. Config files can still be written, but runtime pickup is not guaranteed.`
+    ));
+  }
+
+  if (asset.type === 'mcp') {
+    const targetPath = getMcpConfigPath(provider, providerProjectRoot);
+    if (!targetPath) {
+      plan.issues.push(issue('blocking', 'unsupported_target', `${provider} does not support MCP bundle sync for this scope`));
+      return plan;
+    }
+    if (!asset.rawConfig) {
+      plan.issues.push(issue('blocking', 'missing_source_config', 'MCP source config entry not found'));
+      return plan;
+    }
+
+    const targetDoc = readLocalJson(targetPath);
+    const targetEntry = extractMcpEntryFromDocument(targetDoc, provider, asset.name);
+    const same = targetEntry && stableStringify(targetEntry) === stableStringify(asset.rawConfig);
+    const action = same ? 'noop' : (targetEntry ? 'update' : 'create');
+    plan.operations.push(operation(
+      action,
+      'provider-json-entry-merge',
+      `${action === 'create' ? 'Create' : action === 'update' ? 'Update' : 'Keep'} MCP entry "${asset.name}" for ${provider}`,
+      {
+        targetPath,
+        assetName: asset.name,
+        entryValue: asset.rawConfig,
+        provider,
+      }
+    ));
+    plan.canApply = true;
+    plan.hasChanges = action !== 'noop';
+    return plan;
+  }
+
+  if (!asset.filePath) {
+    plan.issues.push(issue('blocking', 'missing_source_path', 'Source asset has no file path'));
+    return plan;
+  }
+
+  const targetPath = getTargetPath(provider, asset.type, asset.name, providerProjectRoot);
+  if (!targetPath || targetPath === '__mcp__') {
+    plan.issues.push(issue('blocking', 'unsupported_target', `${provider} does not support ${asset.type} bundle sync for this scope`));
+    return plan;
+  }
+
+  const sourceContent = readLocalText(asset.filePath);
+  const exists = fs.existsSync(targetPath);
+  const action = connection?.connected && connection.isSymlink && sameSymlink(targetPath, asset.filePath)
+    ? 'noop'
+    : (!exists ? 'create' : (readLocalText(targetPath) === sourceContent ? 'noop' : 'update'));
+
+  plan.operations.push(operation(
+    action,
+    'provider-file-link',
+    `${action === 'create' ? 'Create' : action === 'update' ? 'Update' : 'Keep'} ${asset.type} for ${provider}`,
+    {
+      sourcePath: asset.filePath,
+      targetPath,
+      content: sourceContent,
+      provider,
+    }
+  ));
+  plan.canApply = true;
+  plan.hasChanges = action !== 'noop';
+  if (action === 'update') {
+    plan.issues.push(issue('warning', 'target_exists', 'Provider target already exists and will be replaced'));
   }
   return plan;
 }
@@ -398,11 +563,21 @@ async function previewSync(body, opts) {
   }
 
   if (body.target.kind === 'project') {
-    return previewProjectSync(source, body.target, opts);
+    const plan = await previewProjectSync(source, body.target, opts);
+    appendDependencyImpactWarnings(plan, source, opts.dependencyGraph);
+    return plan;
+  }
+
+  if (body.target.kind === 'provider') {
+    const plan = await previewProviderSync(source, body.target);
+    appendDependencyImpactWarnings(plan, source, opts.dependencyGraph);
+    return plan;
   }
 
   if (body.target.kind === 'server') {
-    return previewServerSync(source, body.target, opts);
+    const plan = await previewServerSync(source, body.target, opts);
+    appendDependencyImpactWarnings(plan, source, opts.dependencyGraph);
+    return plan;
   }
 
   return {
@@ -432,6 +607,25 @@ async function applyProjectOperation(op) {
     return;
   }
   fs.copyFileSync(op.sourcePath, op.targetPath);
+}
+
+async function applyProviderOperation(op) {
+  if (op.action === 'noop') return;
+  if (op.mode === 'provider-json-entry-merge') {
+    const currentDoc = readLocalJson(op.targetPath);
+    const nextDoc = setMcpEntry(currentDoc, op.provider, op.assetName, op.entryValue);
+    ensureDir(op.targetPath);
+    fs.writeFileSync(op.targetPath, JSON.stringify(nextDoc, null, 2), 'utf-8');
+    return;
+  }
+
+  ensureDir(op.targetPath);
+  if (fs.existsSync(op.targetPath)) fs.rmSync(op.targetPath, { force: true });
+  try {
+    fs.symlinkSync(path.resolve(op.sourcePath), op.targetPath);
+  } catch {
+    fs.copyFileSync(op.sourcePath, op.targetPath);
+  }
 }
 
 async function applyServerOperations(plan, opts) {
@@ -478,6 +672,10 @@ async function applySync(body, opts) {
   if (body.target.kind === 'project') {
     for (const op of changedOps) {
       await applyProjectOperation(op);
+    }
+  } else if (body.target.kind === 'provider') {
+    for (const op of changedOps) {
+      await applyProviderOperation(op);
     }
   } else if (body.target.kind === 'server') {
     await applyServerOperations(plan, opts);
