@@ -46,14 +46,14 @@ export default function App() {
   const [auditMode, setAuditMode] = useState<AuditMode | null>(null);
   const [categories, setCategories] = useState<Record<string, number>>({});
   const [search, setSearch] = useState('');
-  const [typeFilter, setTypeFilter] = usePersistedState<AssetType | null>('aem:filter:type', null);
-  const [providerFilter, setProviderFilter] = usePersistedState<Provider | null>('aem:filter:provider', null);
-  const [categoryFilter, setCategoryFilter] = usePersistedState<string | null>('aem:filter:category', null);
+  const [typeFilter, setTypeFilter] = usePersistedState<AssetType | null>('hcp:filter:type', null);
+  const [providerFilter, setProviderFilter] = usePersistedState<Provider | null>('hcp:filter:provider', null);
+  const [categoryFilter, setCategoryFilter] = usePersistedState<string | null>('hcp:filter:category', null);
   const [healthFilter, setHealthFilter] = useState<AssetHealthStatus | null>(null);
   const [driftFilter, setDriftFilter] = useState<DriftStatus | null>(null);
   const [dependencyFilter, setDependencyFilter] = useState<'orphaned' | null>(null);
-  const [hiddenProviders, setHiddenProviders] = usePersistedState<Provider[]>('aem:hidden:providers', []);
-  const [sidebarHidden, setSidebarHidden] = usePersistedState<{ types: string[]; providers: Provider[]; categories: string[] }>('aem:hidden:sidebar', { types: [], providers: [], categories: [] });
+  const [hiddenProviders, setHiddenProviders] = usePersistedState<Provider[]>('hcp:hidden:providers', []);
+  const [sidebarHidden, setSidebarHidden] = usePersistedState<{ types: string[]; providers: Provider[]; categories: string[] }>('hcp:hidden:sidebar', { types: [], providers: [], categories: [] });
   const [loading, setLoading] = useState(true);
   const [connectTarget, setConnectTarget] = useState<Asset | null>(null);
   const [detailAsset, setDetailAsset] = useState<Asset | null>(null);
@@ -192,7 +192,7 @@ export default function App() {
   const grouped = useMemo(() => {
     const map = new Map<string, Asset[]>();
     for (const asset of visibleAssets) {
-      const cat = asset.cat || 'Other';
+      const cat = (asset.cat === 'Instructions' ? 'Rules' : asset.cat) || 'Other';
       if (!map.has(cat)) map.set(cat, []);
       map.get(cat)!.push(asset);
     }
@@ -240,7 +240,7 @@ export default function App() {
       const anchor = document.createElement('a');
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       anchor.href = url;
-      anchor.download = `aem-audit-report-${timestamp}.json`;
+      anchor.download = `hcp-audit-report-${timestamp}.json`;
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();

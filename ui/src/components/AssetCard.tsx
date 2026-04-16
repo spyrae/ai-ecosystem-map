@@ -6,7 +6,7 @@ const TYPE_INLINE: Record<string, { bg: string; text: string; border: string }> 
   skill:       { bg: '#0d3320', text: '#34d399', border: '#155e3b' },
   agent:       { bg: '#2a1754', text: '#a78bfa', border: '#3b1f7a' },
   mcp:         { bg: '#3b1a0a', text: '#fb923c', border: '#5c2a10' },
-  instruction: { bg: '#083344', text: '#22d3ee', border: '#0e4d5e' },
+  instruction: { bg: '#0d3330', text: '#2dd4bf', border: '#155e55' },
   rule:        { bg: '#0d3330', text: '#2dd4bf', border: '#155e55' },
 };
 
@@ -63,7 +63,7 @@ export function AssetCard({
   const typeInline = asset.isOrchestrator
     ? TYPE_INLINE.agent
     : TYPE_INLINE[asset.type] || TYPE_INLINE.skill;
-  const badgeLabel = asset.isOrchestrator ? 'orchestrator' : asset.type;
+  const badgeLabel = asset.isOrchestrator ? 'orchestrator' : asset.type === 'instruction' ? 'rule' : asset.type;
 
   return (
     <div

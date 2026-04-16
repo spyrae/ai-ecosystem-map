@@ -20,7 +20,7 @@ struct AssetCardView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // Header: type badge + name
+            // Header: name with "/" prefix + type badge
             HStack(spacing: 6) {
                 if selectionMode {
                     Button {
@@ -31,13 +31,18 @@ struct AssetCardView: View {
                     }
                     .buttonStyle(.plain)
                 }
-                Image(systemName: asset.type.icon)
-                    .font(.caption)
-                    .foregroundStyle(typeColor)
-                Text(asset.name)
+                Text("/\(asset.name)")
                     .font(.system(.body, design: .monospaced, weight: .medium))
                     .lineLimit(1)
                 Spacer()
+                Text(asset.type.badgeLabel)
+                    .font(.caption2.weight(.semibold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(typeColor.opacity(0.12), in: Capsule())
+                    .foregroundStyle(typeColor)
+
+                /* Hidden for web-style simplification
                 if let health = asset.health, health.status != "ok" {
                     Label(health.status == "broken" ? "Broken" : "Warning", systemImage: health.status == "broken" ? "exclamationmark.octagon.fill" : "exclamationmark.triangle.fill")
                         .font(.caption2)
@@ -68,16 +73,18 @@ struct AssetCardView: View {
                         .foregroundStyle(.orange)
                         .help("Orchestrator")
                 }
+                */
             }
 
-            // Description
+            // Description (max 4 lines)
             if !asset.desc.isEmpty {
                 Text(asset.desc)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .lineLimit(2)
+                    .lineLimit(4)
             }
 
+            /* Hidden for web-style simplification
             if let health = asset.health, health.status != "ok" {
                 Text(health.summary)
                     .font(.caption2)
@@ -117,43 +124,48 @@ struct AssetCardView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
             }
+            */
 
-            // Provider badges
+            // "Connected to" + provider names
             if !asset.providers.isEmpty {
                 HStack(spacing: 4) {
+                    Text("Connected to")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
                     ForEach(asset.providers, id: \.self) { providerName in
                         if let provider = Provider(rawValue: providerName) {
-                            Image(systemName: provider.icon)
-                                .font(.caption2)
+                            Text(provider.label)
+                                .font(.caption2.weight(.medium))
                                 .foregroundStyle(.secondary)
-                                .help(provider.label)
                         }
-                    }
-                    Spacer()
-
-                    // Deps count
-                    if !asset.deps.isEmpty {
-                        HStack(spacing: 2) {
-                            Image(systemName: "arrow.right")
-                            Text("\(asset.deps.count)")
-                        }
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .help("Uses \(asset.deps.count) other assets")
-                    }
-
-                    if !usedBy.isEmpty {
-                        HStack(spacing: 2) {
-                            Image(systemName: "arrow.left")
-                            Text("\(usedBy.count)")
-                        }
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .help("Used by \(usedBy.count) assets")
                     }
                 }
+
+                /* Hidden for web-style simplification
+                // Deps count
+                if !asset.deps.isEmpty {
+                    HStack(spacing: 2) {
+                        Image(systemName: "arrow.right")
+                        Text("\(asset.deps.count)")
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .help("Uses \(asset.deps.count) other assets")
+                }
+
+                if !usedBy.isEmpty {
+                    HStack(spacing: 2) {
+                        Image(systemName: "arrow.left")
+                        Text("\(usedBy.count)")
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .help("Used by \(usedBy.count) assets")
+                }
+                */
             }
 
+            /* Hidden for web-style simplification
             // Tags
             if !asset.tags.isEmpty {
                 HStack(spacing: 4) {
@@ -171,6 +183,7 @@ struct AssetCardView: View {
                     }
                 }
             }
+            */
         }
         .padding(12)
         .background(
@@ -213,7 +226,7 @@ struct AssetCardView: View {
         case .skill: .blue
         case .agent: .purple
         case .mcp: .green
-        case .instruction: .orange
+        case .instruction: .cyan
         case .rule: .cyan
         }
     }

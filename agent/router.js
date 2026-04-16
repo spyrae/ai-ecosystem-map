@@ -131,7 +131,7 @@ function createRouter(ctx) {
     };
 
     const requestClient = (() => {
-      const raw = req.headers['x-aem-client'];
+      const raw = req.headers['x-hcp-client'] || req.headers['x-aem-client'];
       const value = Array.isArray(raw) ? raw[0] : raw;
       return typeof value === 'string' && value.trim() ? value.trim() : 'api';
     })();
@@ -890,7 +890,10 @@ function createRouter(ctx) {
       const category = url.searchParams.get('category');
       const search = url.searchParams.get('q');
 
-      if (type) assets = assets.filter(a => a.type === type);
+      if (type) {
+        const types = type.split(',');
+        assets = assets.filter(a => types.includes(a.type));
+      }
       if (provider) assets = assets.filter(a => (a.providers || []).includes(provider));
       if (category) assets = assets.filter(a => a.cat === category);
       if (search) {

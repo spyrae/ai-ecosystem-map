@@ -15,11 +15,23 @@ final class EcosystemStore: @unchecked Sendable {
     var servers: [ServerEnvironment] = []
     var runningAgents: [RunningAgent] = []
 
-    // Filters
+    // Filters (persisted via UserDefaults)
     var searchText = ""
-    var typeFilter: AssetType?
-    var providerFilter: Provider?
-    var categoryFilter: String?
+    var typeFilter: AssetType? {
+        didSet {
+            if let typeFilter { UserDefaults.standard.set(typeFilter.rawValue, forKey: "filter.type") }
+            else { UserDefaults.standard.removeObject(forKey: "filter.type") }
+        }
+    }
+    var providerFilter: Provider? {
+        didSet {
+            if let providerFilter { UserDefaults.standard.set(providerFilter.rawValue, forKey: "filter.provider") }
+            else { UserDefaults.standard.removeObject(forKey: "filter.provider") }
+        }
+    }
+    var categoryFilter: String? {
+        didSet { UserDefaults.standard.set(categoryFilter, forKey: "filter.category") }
+    }
     var healthFilter: AssetHealthFilter?
     var dependencyFilter: AssetDependencyFilter?
     var driftFilter: AssetDriftStatus?
@@ -40,13 +52,31 @@ final class EcosystemStore: @unchecked Sendable {
     var historyLoading = false
     var historyBusyKey: String?
 
+    // MARK: - Init
+
+    init() {
+        let defaults = UserDefaults.standard
+        if let raw = defaults.string(forKey: "filter.type") {
+            typeFilter = AssetType(rawValue: raw)
+        }
+        if let raw = defaults.string(forKey: "filter.provider") {
+            providerFilter = Provider(rawValue: raw)
+        }
+        categoryFilter = defaults.string(forKey: "filter.category")
+    }
+
     // MARK: - Computed
 
     var filteredAssets: [Asset] {
         var result = assets
 
         if let type = typeFilter {
-            result = result.filter { $0.type == type }
+            // When filtering by .rule, also include .instruction assets (merged in UI)
+            if type == .rule {
+                result = result.filter { $0.type == .rule || $0.type == .instruction }
+            } else {
+                result = result.filter { $0.type == type }
+            }
         }
         if let provider = providerFilter {
             result = result.filter { $0.providers.contains(provider.rawValue) }
@@ -82,7 +112,7 @@ final class EcosystemStore: @unchecked Sendable {
     var groupedAssets: [(String, [Asset])] {
         var map: [String: [Asset]] = [:]
         for asset in filteredAssets {
-            let cat = asset.cat.isEmpty ? "Other" : asset.cat
+            let cat = (asset.cat == "Instructions" ? "Rules" : asset.cat).isEmpty ? "Other" : (asset.cat == "Instructions" ? "Rules" : asset.cat)
             map[cat, default: []].append(asset)
         }
         return map.sorted { $0.value.count > $1.value.count }

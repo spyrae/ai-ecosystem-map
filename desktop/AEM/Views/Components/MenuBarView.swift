@@ -40,7 +40,7 @@ struct MenuBarView: View {
             }
             .keyboardShortcut("r")
 
-            Button("Open AEM") {
+            Button("Open HCP") {
                 NSApp.activate(ignoringOtherApps: true)
                 if let window = NSApp.windows.first(where: { $0.canBecomeMain }) {
                     window.makeKeyAndOrderFront(nil)

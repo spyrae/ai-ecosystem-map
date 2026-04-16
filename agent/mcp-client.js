@@ -457,7 +457,7 @@ function inspectStdioRuntime(config, timeoutMs) {
       params: {
         protocolVersion: DEFAULT_PROTOCOL_VERSION,
         capabilities: {},
-        clientInfo: { name: 'ai-ecosystem-map', version: '1.0.0' },
+        clientInfo: { name: 'harness-control-plane', version: '0.1.0' },
       },
     });
   });
@@ -493,7 +493,7 @@ async function inspectHttpRuntime(config, timeoutMs) {
       params: {
         protocolVersion: DEFAULT_PROTOCOL_VERSION,
         capabilities: {},
-        clientInfo: { name: 'ai-ecosystem-map', version: '1.0.0' },
+        clientInfo: { name: 'harness-control-plane', version: '0.1.0' },
       },
     });
 

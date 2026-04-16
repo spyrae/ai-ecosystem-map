@@ -22,8 +22,8 @@ const SNAPSHOT_RETENTION_COUNT = 200;
 const SNAPSHOT_RETENTION_SECONDS = 30 * 24 * 60 * 60;
 
 function resolveDbPaths() {
-  const testDbPath = process.env._AEM_TEST_DB || '';
-  const dbDir = testDbPath ? path.dirname(testDbPath) : path.join(HOME, '.ai-ecosystem-map');
+  const testDbPath = process.env._HCP_TEST_DB || process.env._AEM_TEST_DB || '';
+  const dbDir = testDbPath ? path.dirname(testDbPath) : path.join(HOME, '.harness-control-plane');
   const dbPath = testDbPath || path.join(dbDir, 'state.db');
   return { dbDir, dbPath };
 }

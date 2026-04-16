@@ -50,7 +50,7 @@ function resolveRunningAgentTarget(target, opts) {
   const introspection = agent.introspection || agentIntrospection.getCachedIntrospection(agent);
   if (!introspection?.checkedAt) {
     return {
-      error: 'Run introspection for this agent first so AEM can resolve the backing project.',
+      error: 'Run introspection for this agent first so HCP can resolve the backing project.',
       code: 'agent_not_introspected',
       agent,
     };

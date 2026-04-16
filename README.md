@@ -1,80 +1,87 @@
-# AI Ecosystem Map
+# Harness Control Plane
 
-[![npm version](https://img.shields.io/npm/v/ai-ecosystem-map.svg)](https://www.npmjs.com/package/ai-ecosystem-map)
-[![CI](https://github.com/spyrae/ai-ecosystem-map/actions/workflows/ci.yml/badge.svg)](https://github.com/spyrae/ai-ecosystem-map/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/harness-control-plane.svg)](https://www.npmjs.com/package/harness-control-plane)
 [![License: BSL 2.0](https://img.shields.io/badge/License-BSL_2.0-orange.svg)](LICENSE)
+[![Beta](https://img.shields.io/badge/status-beta-yellow.svg)](#beta-notice)
 
-Harness control plane for agent tooling across local machines, projects, remote servers, and running runtimes. Auto-discovers skills, agents, MCP servers, rules, and instructions from **7 AI coding tools** — with real-time sync, connect/disconnect, and a native macOS app.
-
-Short mark: `AEM`
+**One dashboard to rule all your AI coding tools.** Discover, manage, and sync skills, agents, MCP servers, and rules across Claude Code, Codex CLI, Gemini CLI, Cursor, Windsurf, GitHub Copilot, and Continue.dev. Copy an agent from Claude to Codex in one click. See what's connected where. Keep everything in sync.
 
 <p align="center">
-  <img src="docs/screenshot-macos.png" alt="AEM — macOS App" width="800">
+  <img src="docs/screenshot-web.png" alt="Harness Control Plane — Web UI" width="800">
 </p>
+
+<p align="center">
+  <img src="docs/screenshot-macos.png" alt="Harness Control Plane — macOS App" width="800">
+</p>
+
+## Why
+
+You use multiple AI coding assistants. Each has its own config format, its own directory, its own way of defining skills, agents, and rules. You wrote a great prompt for Claude Code — now you want it in Codex and Gemini too. You added an MCP server to one project — where else is it configured?
+
+Harness Control Plane answers all of that. It auto-discovers everything, shows you the full picture, and lets you connect assets between tools with a single click (via symlinks — no duplication, always in sync).
 
 ## Two Ways to Use
 
 | | **macOS App** | **CLI / Web UI** |
 |---|---|---|
-| **Install** | [Download DMG](https://github.com/spyrae/ai-ecosystem-map/releases/latest) | `npx ai-ecosystem-map` |
+| **Install** | [Download DMG](https://github.com/spyrae/harness-control-plane/releases/latest) | `npx harness-control-plane` |
 | **Best for** | Local daily use | VPS, remote, headless |
 | **UI** | Native SwiftUI | React SPA in browser |
-| **Agent** | Auto-launches on start | Manual `aem` command |
+| **Agent** | Auto-launches on start | Manual `hcp` command |
 
 ## Supported Tools
 
-| Tool | What it scans |
+| Tool | What HCP scans |
 |------|--------------|
-| **Claude Code** | `~/.claude/commands/`, `~/.claude/agents/`, `.mcp.json` |
-| **Codex CLI** | `.codex/`, `AGENTS.md`, shared skills |
-| **Gemini CLI** | `.gemini/`, `GEMINI.md`, shared skills |
+| **Claude Code** | `~/.claude/commands/`, `~/.claude/agents/`, `~/.claude/rules/`, `.mcp.json`, `CLAUDE.md` |
+| **Codex CLI** | `.codex/skills/`, `.codex/agents/`, `.codex/mcp.json`, `AGENTS.md` |
+| **Gemini CLI** | `.gemini/skills/`, `.gemini/mcp.json`, `GEMINI.md` |
 | **Cursor** | `.cursor/rules/`, `.cursorrules` |
-| **Windsurf** | `.windsurf/rules/`, `.windsurfrules` |
-| **GitHub Copilot** | `.github/copilot-instructions.md`, `AGENTS.md` |
-| **Continue** | `.continue/config.json` |
+| **Windsurf** | `.windsurf/rules/`, `.windsurf/mcp.json`, `.windsurfrules` |
+| **GitHub Copilot** | `.github/copilot-instructions.md` |
+| **Continue.dev** | `.continue/config.json` |
 
-## Features
+## Key Features
 
 ### Ecosystem Map
-- **Multi-tool discovery** — scans configs from 7 AI coding assistants
-- **Provider badges** — see which AI tools can use each asset
-- **Smart search** — find assets by name, description, or tags
-- **Auto-categorization** — Development, DevOps, Security, Content, SEO, UX, etc.
-- **Connect/Disconnect** — share skills between AI tools via symlinks
-- **Source protection** — original files marked as "source", can't accidentally disconnect
+- **Auto-discovery** across 7 AI coding tools, local and remote
+- **Filterable sidebar** — by type, provider, category. Hide what you don't need, settings persist
+- **Smart search** — find any asset by name, description, or tags
+- **Auto-categorization** — Development, DevOps, Security, Content, SEO, UX, and more
 
-### CRUD Operations
-- **Create** assets (skills, agents, rules) with AI generation
-- **Edit** file content inline with save/revert
-- **Delete** with confirmation
-- **Move/Copy** assets between projects
+### Connect & Sync
+- **One-click connect** — share a Claude skill with Codex and Gemini instantly
+- **Symlink-based** — no file duplication, edit once and all tools see the update
+- **Disconnect** any time — clean removal, no orphaned files
+- **Source protection** — original files can't be accidentally deleted from connected targets
 
-### Project Management
-- **Auto-discovery** — scans directories for projects with AI tooling
-- **Project-level assets** — local `.claude/commands/`, `.cursor/rules/`, project `.mcp.json`
-- **Provider detection** — shows which AI tools each project uses
+### Create & Import
+- **Create** new skills, agents, MCP servers, and rules from the UI
+- **Import from file** — drag in an existing `.md`, `.json`, or `.yaml` — type auto-detected
+- **Edit inline** — modify file content with save/revert directly in the app
+- **Delete** with downstream impact warnings (shows what will break)
 
-### Remote Servers
-- **SSH connection** — add VPS/remote servers
-- **Remote scanning** — discovers AI assets on remote machines
-- **Diff view** — compare local vs remote
-- **Push/Pull** — sync skills and agents via SCP
+### History & Rollback
+- **Full audit trail** — every create, connect, disconnect, delete is logged
+- **One-click undo** — revert the last change
+- **Rollback any entry** — restore a specific historical state
+- **Approval tracking** — records who made each change and from which client
 
 ### Real-Time
-- **File watcher** — detects config changes instantly
-- **WebSocket sync** — UI updates live
+- **File watcher** — config changes detected instantly
+- **WebSocket sync** — UI updates live across web and macOS
 - **SQLite persistence** — state survives restarts
 
 ## Quick Start
 
 ### macOS App
 
-Download from [GitHub Releases](https://github.com/spyrae/ai-ecosystem-map/releases/latest), open the DMG, drag to Applications. Requires Node.js installed (`brew install node`).
+Download from [GitHub Releases](https://github.com/spyrae/harness-control-plane/releases/latest), open the DMG, drag to Applications. Requires Node.js (`brew install node`).
 
 ### CLI
 
 ```bash
-npx ai-ecosystem-map
+npx harness-control-plane
 ```
 
 Opens the web UI at `http://localhost:3000`.
@@ -82,29 +89,29 @@ Opens the web UI at `http://localhost:3000`.
 ### Install Globally
 
 ```bash
-npm install -g ai-ecosystem-map
-aem                    # Start web UI
+npm install -g harness-control-plane
+hcp                    # Start web UI
 ```
 
 ## Usage
 
 ```bash
 # Web UI (default)
-aem                        # Start on port 3000, open browser
-aem -p 8080                # Custom port
-aem --headless             # API only, no UI (for VPS)
-aem --no-open              # Don't auto-open browser
+hcp                        # Start on port 3000, open browser
+hcp -p 8080                # Custom port
+hcp --headless             # API only, no UI (for VPS)
+hcp --no-open              # Don't auto-open browser
 
 # Static HTML (one-shot)
-aem scan                   # Print summary to stdout
-aem scan -o map.html       # Generate self-contained HTML file
+hcp scan                   # Print summary to stdout
+hcp scan -o map.html       # Generate self-contained HTML file
 ```
 
 ### VPS / Remote
 
 ```bash
 # On your VPS:
-aem --headless -p 3000
+hcp --headless -p 3000
 
 # Access from local machine:
 ssh -L 3000:localhost:3000 user@your-vps
@@ -118,49 +125,71 @@ open http://localhost:3000
 | `Cmd+F` | Focus search |
 | `Cmd+N` | Create new asset |
 | `Cmd+R` | Rescan ecosystem |
-| `Cmd+1-4` | Switch views (Map/Projects/Agents/Servers) |
+| `Cmd+Z` | Undo last change |
 | `Escape` | Close panel / clear search |
 
 ## Architecture
 
 ```
-ai-ecosystem-map/
-├── bin/cli.js          # CLI entry point (aem command)
+harness-control-plane/
+├── bin/cli.js          # CLI entry (hcp command)
 ├── agent/
 │   ├── server.js       # HTTP + WebSocket server
-│   ├── router.js       # REST API routes
+│   ├── router.js       # REST API (50+ endpoints)
 │   ├── scanner/        # Multi-tool asset discovery
-│   ├── categorizer.js  # Keyword-based categorization
-│   ├── connector/      # Connect/disconnect between tools
-│   ├── projects.js     # Project discovery & scanning
-│   ├── remote.js       # SSH connection & remote scanning
-│   ├── watcher/        # File system watcher
+│   ├── connector/      # Connect/disconnect via symlinks
+│   ├── sync.js         # Cross-provider sync engine
+│   ├── health.js       # Asset health checks
+│   ├── drift.js        # Drift detection across copies
+│   ├── snapshots.js    # Rollback snapshots
 │   └── store/          # SQLite persistent state
-├── desktop/            # macOS SwiftUI app (Xcode project)
+├── desktop/            # macOS SwiftUI app (Xcode)
 ├── ui/                 # React + TypeScript + Tailwind
-│   └── dist/           # Built UI (served by agent)
 └── template/           # Static HTML fallback
 ```
 
 ## API
 
-All endpoints under `/api/`:
+All endpoints under `/api/`. Full CRUD for assets, projects, servers, bundles, and policies.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/assets` | GET | List assets (filters: type, provider, category, q) |
 | `/api/assets/create` | POST | Create new asset |
-| `/api/assets/:name/content` | GET/PUT | Read/update asset content |
+| `/api/assets/:id/content` | GET/PUT | Read/update content |
 | `/api/connect` | POST | Connect asset to a tool |
-| `/api/disconnect` | POST | Disconnect asset from a tool |
-| `/api/projects` | GET | List discovered projects |
-| `/api/projects/discover` | POST | Scan directories for projects |
-| `/api/servers` | GET | List environments (local + remote) |
-| `/api/servers/:id/diff` | GET | Diff local vs remote |
-| `/api/rescan` | POST | Trigger full rescan |
-| `/api/generate` | POST | AI-generate asset content |
+| `/api/disconnect` | POST | Disconnect from a tool |
+| `/api/rescan` | POST | Full ecosystem rescan |
+| `/api/history` | GET | Audit trail |
+| `/api/undo` | POST | Undo last change |
 
-WebSocket at `/ws` — pushes `assets:updated` events on file changes.
+WebSocket at `/ws` pushes `assets:updated` events on any file change.
+
+## Beta Notice
+
+> **This is a beta release (v0.1.0).** Core functionality is stable and tested, but expect rough edges. Some features (Projects, Servers, Bundles, Policies views) are hidden in the UI while being finalized. If you encounter bugs, please [open an issue](https://github.com/spyrae/harness-control-plane/issues).
+
+## Contributing
+
+Contributions are welcome! This project is open for:
+
+- **Bug reports** — [open an issue](https://github.com/spyrae/harness-control-plane/issues) with reproduction steps
+- **Feature requests** — describe your use case, we'll discuss
+- **Pull requests** — fork, branch, make changes, open a PR
+- **New provider support** — want to add support for Aider, Roo Code, or another tool? PRs welcome
+- **Documentation** — improvements to README, API docs, or inline comments
+
+### Development
+
+```bash
+git clone https://github.com/spyrae/harness-control-plane.git
+cd harness-control-plane
+npm install
+npm run dev          # Start agent without opening browser
+npm run dev:ui       # Start Vite dev server for UI hot-reload
+```
+
+macOS app: open `desktop/AEM.xcodeproj` in Xcode, build & run.
 
 ## Requirements
 
@@ -171,3 +200,7 @@ WebSocket at `/ws` — pushes `assets:updated` events on file changes.
 ## License
 
 [BSL 2.0](LICENSE) — free to use, modify, and self-host. Cannot be sold as a competing product. Converts to MIT on 2030-04-06.
+
+---
+
+Built by [@spyrae](https://github.com/spyrae). If you find this useful, star the repo.

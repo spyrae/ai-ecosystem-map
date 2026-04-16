@@ -336,7 +336,7 @@ function ManifestExportModal({
           <div className="flex items-start justify-between gap-4">
             <div>
               <div className="text-base font-semibold text-text">Export Workspace Manifest</div>
-              <div className="mt-1 text-xs text-muted">Portable snapshot of harness assets, bundles, and policies for another AEM workspace.</div>
+              <div className="mt-1 text-xs text-muted">Portable snapshot of harness assets, bundles, and policies for another HCP workspace.</div>
             </div>
             <button onClick={onClose} className="text-muted transition-colors hover:text-text" aria-label="Close manifest export">
               ✕
@@ -891,7 +891,7 @@ export function BundlesView({
       const anchor = document.createElement('a');
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       anchor.href = url;
-      anchor.download = `aem-workspace-manifest-${timestamp}.json`;
+      anchor.download = `hcp-workspace-manifest-${timestamp}.json`;
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();

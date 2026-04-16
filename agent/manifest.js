@@ -8,7 +8,7 @@ const {
   inferProjectAssetTarget,
 } = require('./pathing');
 
-const MANIFEST_KIND = 'aem-workspace-manifest';
+const MANIFEST_KIND = 'hcp-workspace-manifest';
 const MANIFEST_VERSION = 1;
 const SUPPORTED_ASSET_TYPES = new Set(['skill', 'agent', 'mcp', 'instruction', 'rule']);
 
@@ -217,7 +217,7 @@ function exportManifest(selection = {}, opts = {}) {
     schemaVersion: MANIFEST_VERSION,
     exportedAt: Date.now(),
     source: {
-      app: 'AEM',
+      app: 'HCP',
       version: MANIFEST_VERSION,
     },
     summary: {

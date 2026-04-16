@@ -17,7 +17,7 @@ enum AssetType: String, Codable, CaseIterable, Identifiable {
         case .skill: "Skills"
         case .agent: "Agents"
         case .mcp: "MCP Servers"
-        case .instruction: "Instructions"
+        case .instruction: "Rules"
         case .rule: "Rules"
         }
     }
@@ -27,9 +27,19 @@ enum AssetType: String, Codable, CaseIterable, Identifiable {
         case .skill: "terminal.fill"
         case .agent: "sparkles"
         case .mcp: "server.rack"
-        case .instruction: "doc.text.fill"
+        case .instruction: "checklist"
         case .rule: "checklist"
         }
+    }
+
+    /// Types shown in the Create Asset picker (instruction merged into rule)
+    static var creatableTypes: [AssetType] {
+        [.skill, .agent, .mcp, .rule]
+    }
+
+    /// Badge label shown on cards (instruction displays as "rule")
+    var badgeLabel: String {
+        self == .instruction ? "rule" : rawValue
     }
 }
 

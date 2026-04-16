@@ -1,7 +1,7 @@
 Business Source License 2.0
 
 Licensor: Roman Belov
-Licensed Work: AI Ecosystem Map (AEM)
+Licensed Work: Harness Control Plane (HCP)
 Version: 1.0
 
 Terms
@@ -24,17 +24,17 @@ AI assistants.
 For clarity, the following uses are explicitly permitted:
 
 - Personal and internal business use (any scale)
-- Using AEM as part of your development workflow
-- Modifying AEM for your own needs
-- Integrating AEM into your internal toolchain
+- Using HCP as part of your development workflow
+- Modifying HCP for your own needs
+- Integrating HCP into your internal toolchain
 - Contributing improvements back to the project
-- Using AEM in educational and research settings
+- Using HCP in educational and research settings
 
 The following uses require a separate commercial license from the Licensor:
 
-- Selling AEM or a substantially similar product
-- Offering AEM as a hosted/managed service for third parties
-- Bundling AEM into a commercial product for sale
+- Selling HCP or a substantially similar product
+- Offering HCP as a hosted/managed service for third parties
+- Bundling HCP into a commercial product for sale
 
 Change Date: 2030-04-06
 

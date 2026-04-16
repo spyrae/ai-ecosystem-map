@@ -249,7 +249,7 @@ export const TYPE_LABELS: Record<AssetType, string> = {
   skill: 'Skills',
   agent: 'Agents',
   mcp: 'MCP Servers',
-  instruction: 'Instructions',
+  instruction: 'Rules',
   rule: 'Rules',
 };
 

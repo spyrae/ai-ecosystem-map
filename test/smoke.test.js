@@ -495,7 +495,7 @@ describe('Store — SQLite operations', () => {
     // Override DB path for testing
     fs.mkdirSync(testDbDir, { recursive: true });
     // Use a fresh DB by setting env
-    process.env._AEM_TEST_DB = path.join(testDbDir, 'test.db');
+    process.env._HCP_TEST_DB = path.join(testDbDir, 'test.db');
   });
 
   after(() => {
@@ -1498,7 +1498,7 @@ describe('Sync engine — project preview/apply', () => {
   });
 
   it('attaches git context to project assets', () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'aem-git-assets-'));
+    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'hcp-git-assets-'));
     fs.mkdirSync(path.join(projectPath, '.claude', 'commands'), { recursive: true });
     fs.writeFileSync(path.join(projectPath, '.claude', 'commands', 'review.md'), '# Review\n');
 
@@ -1517,8 +1517,8 @@ describe('Sync engine — project preview/apply', () => {
   });
 
   it('adds git warnings to project sync previews for dirty repos', async () => {
-    const sourceProject = fs.mkdtempSync(path.join(os.tmpdir(), 'aem-sync-source-'));
-    const targetProject = fs.mkdtempSync(path.join(os.tmpdir(), 'aem-sync-target-'));
+    const sourceProject = fs.mkdtempSync(path.join(os.tmpdir(), 'hcp-sync-source-'));
+    const targetProject = fs.mkdtempSync(path.join(os.tmpdir(), 'hcp-sync-target-'));
     const sourceFile = path.join(sourceProject, '.claude', 'commands', 'release.md');
     fs.mkdirSync(path.dirname(sourceFile), { recursive: true });
     fs.writeFileSync(sourceFile, '# Release\n');

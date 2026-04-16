@@ -46,16 +46,18 @@ struct AssetDetailView: View {
                         .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
                 }
                 metadataSection
+                connectionsSection
+                editorSection
+                healthSection
+                /* Hidden for now — will be enabled when fully tested
                 capabilitySection
                 driftSection
                 dependencySection
                 topologySection
-                healthSection
                 remediationSection
                 runtimeSection
-                connectionsSection
                 depsSection
-                editorSection
+                */
             }
             .padding(16)
         }
@@ -683,7 +685,7 @@ struct AssetDetailView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                if let providers = asset.capabilities?.providers, !providers.isEmpty {
+                if let providers = asset.capabilities?.providers.filter({ $0.state != .unsupported }), !providers.isEmpty {
                     VStack(spacing: 6) {
                         ForEach(providers) { entry in
                             let connection = connections[entry.provider]

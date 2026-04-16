@@ -31,7 +31,7 @@
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>SUFeedURL</key>
-	<string>https://github.com/spyrae/ai-ecosystem-map/releases/latest/download/appcast.xml</string>
+	<string>https://github.com/spyrae/harness-control-plane/releases/latest/download/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string></string>
 </dict>

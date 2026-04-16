@@ -41,7 +41,7 @@ struct AEMApp: App {
                 .environment(agentService)
         }
 
-        MenuBarExtra("AEM", image: "MenuBarIcon") {
+        MenuBarExtra("Harness Control Plane", image: "MenuBarIcon") {
             MenuBarView()
                 .environment(agentService)
                 .environment(store)

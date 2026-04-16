@@ -62,7 +62,7 @@ private struct ManifestExportSheet: View {
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 16) {
-                Text("Portable snapshot of harness assets, bundles, and policies for another AEM workspace.")
+                Text("Portable snapshot of harness assets, bundles, and policies for another HCP workspace.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
 
@@ -385,7 +385,7 @@ struct BundlesListView: View {
     @State private var isExportingManifest = false
     @State private var showManifestFileExporter = false
     @State private var manifestDocument: ManifestJSONDocument?
-    @State private var manifestExportFileName = "aem-workspace-manifest.json"
+    @State private var manifestExportFileName = "hcp-workspace-manifest.json"
     @State private var showManifestFileImporter = false
     @State private var showManifestImportPreview = false
     @State private var manifestImportFileName = ""
@@ -1033,7 +1033,7 @@ struct BundlesListView: View {
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             let data = try encoder.encode(manifest)
             manifestDocument = ManifestJSONDocument(data: data)
-            manifestExportFileName = "aem-workspace-manifest-\(ISO8601DateFormatter().string(from: .now).replacingOccurrences(of: ":", with: "-")).json"
+            manifestExportFileName = "hcp-workspace-manifest-\(ISO8601DateFormatter().string(from: .now).replacingOccurrences(of: ":", with: "-")).json"
             showManifestExport = false
             showManifestFileExporter = true
         } catch {

@@ -2,6 +2,7 @@ import SwiftUI
 
 enum NavigationTab: String, CaseIterable, Identifiable {
     case map = "Ecosystem Map"
+    case history = "History"
     case projects = "Projects"
     case agents = "Agents"
     case servers = "Servers"
@@ -13,12 +14,18 @@ enum NavigationTab: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .map: "square.grid.3x3.fill"
+        case .history: "clock.arrow.circlepath"
         case .projects: "folder.fill"
         case .agents: "sparkles"
         case .servers: "server.rack"
         case .bundles: "shippingbox.fill"
         case .policies: "checklist.checked"
         }
+    }
+
+    /// Tabs shown in the sidebar
+    static var visibleTabs: [NavigationTab] {
+        [.map, .history]
     }
 }
 
@@ -48,7 +55,21 @@ struct ContentView: View {
                 .environment(apiClient)
                 .environment(store)
         }
+        .navigationTitle("")
         .toolbar {
+            ToolbarItem(placement: .navigation) {
+                HStack(spacing: 8) {
+                    Image("SidebarLogo")
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(height: 18)
+                    Text("Harness Control Plane")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.primary)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+            }
             ToolbarItemGroup(placement: .automatic) {
                 Button {
                     Task {
@@ -71,13 +92,6 @@ struct ContentView: View {
                     Label(store.historyBusyKey == "latest" ? "Undoing…" : "Undo Last", systemImage: "arrow.uturn.backward")
                 }
                 .disabled(store.historyBusyKey != nil || !store.canUndoLastHistory || !apiClient.isReady)
-
-                Button {
-                    Task { await store.openHistory(api: apiClient) }
-                } label: {
-                    Label("History", systemImage: "clock.arrow.circlepath")
-                }
-                .disabled(store.historyBusyKey != nil || !apiClient.isReady)
             }
         }
         // Global toast overlay
@@ -104,30 +118,20 @@ struct ContentView: View {
             set: { store.selectedTab = $0 }
         )) {
             Section {
-                ForEach(NavigationTab.allCases) { tab in
+                ForEach(NavigationTab.visibleTabs) { tab in
                     Label(tab.rawValue, systemImage: tab.icon)
                         .tag(tab)
                 }
-            } header: {
-                VStack(alignment: .leading, spacing: 4) {
-                    Image("SidebarLogo")
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(height: 22)
-                    Text("Harness control plane")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.bottom, 4)
             }
         }
         .listStyle(.sidebar)
+        .navigationTitle("")
         .safeAreaInset(edge: .bottom) {
             agentStatusFooter
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
         }
-        .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 260)
+        .navigationSplitViewColumnWidth(min: 160, ideal: 180, max: 220)
     }
 
     private var agentStatusFooter: some View {
@@ -163,6 +167,11 @@ struct ContentView: View {
         switch store.selectedTab {
         case .map:
             EcosystemMapView()
+        case .history:
+            HistorySheetView()
+                .environment(apiClient)
+                .environment(store)
+        // Hidden tabs — kept for future use
         case .projects:
             ProjectsListView()
         case .agents:
@@ -218,21 +227,6 @@ private struct HistorySheetView: View {
                 }
             }
             .navigationTitle("History & Rollback")
-            .toolbar {
-                ToolbarItemGroup(placement: .primaryAction) {
-                    Button {
-                        Task { await store.undoLastHistory(api: apiClient) }
-                    } label: {
-                        Label(store.historyBusyKey == "latest" ? "Undoing…" : "Undo Last", systemImage: "arrow.uturn.backward")
-                    }
-                    .disabled(store.globalReadOnly || store.historyBusyKey != nil || !store.canUndoLastHistory || !apiClient.isReady)
-
-                    Button("Close") {
-                        store.showHistory = false
-                        dismiss()
-                    }
-                }
-            }
         }
         .frame(minWidth: 760, minHeight: 520)
         .task {

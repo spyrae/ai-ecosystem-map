@@ -47,7 +47,7 @@ async function get<T>(path: string, params?: Record<string, string>): Promise<T>
   }
   const res = await fetch(url.toString(), {
     headers: {
-      'X-AEM-Client': 'web',
+      'X-HCP-Client': 'web',
     },
   });
   if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`);
@@ -59,7 +59,7 @@ async function post<T>(path: string, body: unknown): Promise<T> {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'X-AEM-Client': 'web',
+      'X-HCP-Client': 'web',
     },
     body: JSON.stringify(body),
   });
@@ -72,7 +72,7 @@ async function put<T>(path: string, body: unknown): Promise<T> {
     method: 'PUT',
     headers: {
       'Content-Type': 'application/json',
-      'X-AEM-Client': 'web',
+      'X-HCP-Client': 'web',
     },
     body: JSON.stringify(body),
   });
@@ -84,7 +84,7 @@ async function del<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: 'DELETE',
     headers: {
-      'X-AEM-Client': 'web',
+      'X-HCP-Client': 'web',
     },
   });
   if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`);
@@ -99,7 +99,7 @@ export async function fetchAssets(filters?: {
   q?: string;
 }) {
   const params: Record<string, string> = {};
-  if (filters?.type) params.type = filters.type;
+  if (filters?.type) params.type = filters.type === 'rule' ? 'rule,instruction' : filters.type;
   if (filters?.provider) params.provider = filters.provider;
   if (filters?.category) params.category = filters.category;
   if (filters?.q) params.q = filters.q;
@@ -246,7 +246,7 @@ export async function updateAssetContent(assetId: string, content: string, type?
     method: 'PUT',
     headers: {
       'Content-Type': 'application/json',
-      'X-AEM-Client': 'web',
+      'X-HCP-Client': 'web',
     },
     body: JSON.stringify({ content, type }),
   });
@@ -272,7 +272,7 @@ export async function deleteAsset(assetId: string, type: string) {
   const res = await fetch(`${BASE}/assets/${encodeURIComponent(assetId)}?type=${type}`, {
     method: 'DELETE',
     headers: {
-      'X-AEM-Client': 'web',
+      'X-HCP-Client': 'web',
     },
   });
   return res.json();
@@ -361,7 +361,7 @@ export async function removeRunningAgent(id: string) {
   const res = await fetch(`${BASE}/running-agents/${id}`, {
     method: 'DELETE',
     headers: {
-      'X-AEM-Client': 'web',
+      'X-HCP-Client': 'web',
     },
   });
   return res.json();
@@ -491,7 +491,7 @@ export async function updateBundle(bundleId: string, data: {
     method: 'PUT',
     headers: {
       'Content-Type': 'application/json',
-      'X-AEM-Client': 'web',
+      'X-HCP-Client': 'web',
     },
     body: JSON.stringify(data),
   });

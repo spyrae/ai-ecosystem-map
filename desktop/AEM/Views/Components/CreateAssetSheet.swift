@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct CreateAssetSheet: View {
     @Environment(APIClient.self) private var api
@@ -19,13 +20,23 @@ struct CreateAssetSheet: View {
         case .skill: [.claude, .codex, .gemini]
         case .agent: [.claude, .codex]
         case .mcp: [.claude, .codex, .gemini, .windsurf, .continue_dev]
-        case .rule: [.cursor, .windsurf, .claude]
-        case .instruction: [.claude, .codex, .gemini, .copilot, .cursor, .windsurf]
+        case .rule, .instruction: [.claude, .cursor, .windsurf, .codex, .gemini, .copilot]
         }
     }
 
+    /// Whether this rule provider creates an instruction-type file (CLAUDE.md, AGENTS.md, etc.)
+    private var isInstructionDestination: Bool {
+        guard type == .rule else { return false }
+        return [.codex, .gemini, .copilot].contains(provider)
+    }
+
+    /// The actual backend type to send
+    private var effectiveType: AssetType {
+        isInstructionDestination ? .instruction : type
+    }
+
     private var supportsGlobalScope: Bool {
-        switch type {
+        switch effectiveType {
         case .rule: false
         case .instruction: [.claude, .codex, .gemini].contains(provider)
         case .mcp: provider != .continue_dev
@@ -34,7 +45,7 @@ struct CreateAssetSheet: View {
     }
 
     private var supportsProjectScope: Bool {
-        switch type {
+        switch effectiveType {
         case .rule: true
         case .instruction: true
         case .skill: provider != .continue_dev
@@ -79,15 +90,15 @@ struct CreateAssetSheet: View {
                 Section {
                     TextField("Name", text: $name)
                         .textFieldStyle(.roundedBorder)
-                        .disabled(type == .instruction)
+                        .disabled(isInstructionDestination)
 
                     Picker("Type", selection: $type) {
-                        ForEach(AssetType.allCases) { t in
+                        ForEach(AssetType.creatableTypes) { t in
                             Label(t.label, systemImage: t.icon).tag(t)
                         }
                     }
 
-                    if type == .rule || type == .instruction || type == .skill || type == .agent || type == .mcp {
+                    if type == .rule || type == .skill || type == .agent || type == .mcp {
                         Picker("Provider", selection: $provider) {
                             ForEach(availableProviders) { p in
                                 Text(p.label).tag(p)
@@ -112,8 +123,9 @@ struct CreateAssetSheet: View {
                         .font(.system(.body, design: .monospaced))
                         .frame(minHeight: 150)
 
+                    /* Hidden until LLM is configured
                     HStack {
-                        TextField("Describe what this asset should do...", text: $aiDescription)
+                        TextField(aiPlaceholder, text: $aiDescription)
                             .textFieldStyle(.roundedBorder)
                         Button {
                             Task { await generate() }
@@ -124,6 +136,13 @@ struct CreateAssetSheet: View {
                             )
                         }
                         .disabled(aiDescription.isEmpty || isGenerating)
+                    }
+                    */
+
+                    Button {
+                        importFile()
+                    } label: {
+                        Label("Import from File", systemImage: "doc.badge.arrow.up")
                     }
                 }
             }
@@ -177,14 +196,15 @@ struct CreateAssetSheet: View {
         isCreating = true
         defer { isCreating = false }
         do {
+            let finalName = isInstructionDestination ? derivedInstructionName : name
             _ = try await api.createAsset(
-                name: type == .instruction ? derivedInstructionName : name,
-                type: type,
+                name: finalName,
+                type: effectiveType,
                 content: content.isEmpty ? nil : content,
                 provider: provider.rawValue,
                 scope: scope
             )
-            store.showToast("Created \(type == .instruction ? derivedInstructionName : name)")
+            store.showToast("Created \(finalName)")
             await store.loadAll(api: api)
             dismiss()
         } catch {
@@ -192,8 +212,68 @@ struct CreateAssetSheet: View {
         }
     }
 
+    private var aiPlaceholder: String {
+        switch type {
+        case .skill: "e.g. A skill for deploying Docker containers. Should check Dockerfile, build image, push to registry."
+        case .agent: "e.g. An agent for database migrations. Can read schema, generate SQL, validate changes."
+        case .rule, .instruction: "e.g. Rules for a React project. Use functional components, Zustand for state."
+        case .mcp: "e.g. MCP server config for connecting to a custom REST API."
+        }
+    }
+
+    private func importFile() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.plainText, .json, .yaml]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        guard let fileContent = try? String(contentsOf: url, encoding: .utf8) else {
+            store.showToast("Could not read file")
+            return
+        }
+
+        let ext = url.pathExtension.lowercased()
+        let baseName = url.deletingPathExtension().lastPathComponent
+            .lowercased().replacingOccurrences(of: " ", with: "-")
+
+        // Auto-detect type from content
+        let fmPattern = try? NSRegularExpression(pattern: "^---\\s*\\n[\\s\\S]*?\\n---", options: [])
+        let hasFrontmatter = fmPattern?.firstMatch(in: fileContent, range: NSRange(fileContent.startIndex..., in: fileContent)) != nil
+        let hasModel = fileContent.contains("model:")
+        let hasUseWhen = fileContent.lowercased().contains("use when")
+
+        if ext == "json" {
+            if let data = fileContent.data(using: .utf8),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               json["command"] != nil || json["url"] != nil || json["args"] != nil {
+                type = .mcp
+            } else {
+                type = .rule
+            }
+        } else if hasFrontmatter {
+            if hasModel {
+                type = .agent
+            } else if hasUseWhen {
+                type = .skill
+            } else {
+                type = .skill
+            }
+        } else {
+            type = .rule
+        }
+
+        name = baseName
+        content = fileContent
+
+        if !availableProviders.contains(provider) {
+            provider = availableProviders.first ?? .claude
+        }
+    }
+
     private func syncDerivedFields() {
-        if type == .instruction {
+        if isInstructionDestination {
             name = derivedInstructionName
         }
         if type == .mcp && content.isEmpty {

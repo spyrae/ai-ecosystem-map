@@ -39,6 +39,7 @@ export function StatsBar({ stats, healthCounts }: StatsBarProps) {
     { label: 'Skills', value: stats.skill || 0, color: 'text-emerald-400' },
     { label: 'Agents', value: stats.agent || 0, color: 'text-violet-400' },
     { label: 'MCP Servers', value: stats.mcp || 0, color: 'text-orange-400' },
+    { label: 'Rules', value: (stats.rule || 0) + (stats.instruction || 0), color: 'text-teal-400' },
     { label: 'Orchestrators', value: stats.orchestrator || 0, color: 'text-amber-400' },
     { label: 'Broken', value: healthCounts?.broken || 0, color: 'text-red' },
     { label: 'Warnings', value: healthCounts?.warning || 0, color: 'text-amber-300' },

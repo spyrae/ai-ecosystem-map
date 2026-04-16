@@ -3,7 +3,7 @@ import SwiftUI
 struct EcosystemMapView: View {
     @Environment(EcosystemStore.self) private var store
     @Environment(APIClient.self) private var api
-    @State private var showFilters = true
+    @AppStorage("showFilters") private var showFilters = true
     @State private var isBatchRunning = false
     @State private var showBatchDeleteConfirmation = false
 
@@ -321,9 +321,9 @@ struct StatsBarView: View {
                 Divider().frame(height: 14)
                 statPill("Skills", count: stats.skill ?? 0, icon: "terminal.fill")
                 statPill("Agents", count: stats.agent ?? 0, icon: "sparkles")
-                statPill("MCP", count: stats.mcp ?? 0, icon: "server.rack")
-                statPill("Rules", count: stats.rule ?? 0, icon: "checklist")
-                statPill("Instr", count: stats.instruction ?? 0, icon: "doc.text.fill")
+                statPill("MCP Servers", count: stats.mcp ?? 0, icon: "server.rack")
+                statPill("Rules", count: (stats.rule ?? 0) + (stats.instruction ?? 0), icon: "checklist")
+                statPill("Orchestrators", count: stats.orchestrator ?? 0, icon: "arrow.triangle.branch")
                 statPill("Broken", count: healthCounts[.broken] ?? 0, icon: "exclamationmark.octagon.fill")
                 statPill("Warnings", count: healthCounts[.warning] ?? 0, icon: "exclamationmark.triangle.fill")
             }

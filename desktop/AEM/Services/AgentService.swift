@@ -263,9 +263,9 @@ final class AgentService: @unchecked Sendable {
 
         // 4. Global npm installs
         let npmPaths = [
-            NSHomeDirectory() + "/.npm-global/lib/node_modules/ai-ecosystem-map/bin/cli.js",
-            "/usr/local/lib/node_modules/ai-ecosystem-map/bin/cli.js",
-            "/opt/homebrew/lib/node_modules/ai-ecosystem-map/bin/cli.js",
+            NSHomeDirectory() + "/.npm-global/lib/node_modules/harness-control-plane/bin/cli.js",
+            "/usr/local/lib/node_modules/harness-control-plane/bin/cli.js",
+            "/opt/homebrew/lib/node_modules/harness-control-plane/bin/cli.js",
         ]
         for path in npmPaths {
             if FileManager.default.fileExists(atPath: path) {

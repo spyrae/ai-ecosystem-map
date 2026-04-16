@@ -39,25 +39,25 @@ function parseArgs(args) {
 
 function printHelp() {
   console.log(`
-  ai-ecosystem-map v${VERSION}
+  harness-control-plane v${VERSION}
 
-  Visual control plane for your AI coding ecosystem.
+  Visual control plane for your AI coding harness.
   Auto-discovers skills, agents, MCP servers from Claude, Codex,
   Gemini, Cursor, Windsurf, Copilot, and Continue.
 
   Usage:
-    aem [options]              Start agent with web UI
-    aem scan [options]         One-shot scan (no server)
+    hcp [options]              Start agent with web UI
+    hcp scan [options]         One-shot scan (no server)
 
   Agent mode (default):
-    aem                        Start on port 3000, open browser
-    aem -p 8080                Custom port
-    aem --headless             API only, no UI (for VPS)
-    aem --no-open              Don't auto-open browser
+    hcp                        Start on port 3000, open browser
+    hcp -p 8080                Custom port
+    hcp --headless             API only, no UI (for VPS)
+    hcp --no-open              Don't auto-open browser
 
   Scan mode:
-    aem scan                   Print summary to stdout
-    aem scan -o map.html       Generate static HTML file
+    hcp scan                   Print summary to stdout
+    hcp scan -o map.html       Generate static HTML file
 
   Common options:
     -d, --dir <path>           Path to .claude/ directory (default: ~/.claude/)
@@ -69,9 +69,9 @@ function printHelp() {
     -h, --help                 Show this help
 
   Examples:
-    aem                        # Full UI on localhost:3000
-    aem --headless -p 3000     # API only (VPS, access remotely)
-    aem scan -o ecosystem.html # Static HTML file
+    hcp                        # Full UI on localhost:3000
+    hcp --headless -p 3000     # API only (VPS, access remotely)
+    hcp scan -o ecosystem.html # Static HTML file
 `);
 }
 
@@ -141,7 +141,7 @@ async function main() {
   }
 
   // === AGENT MODE (default) ===
-  console.log(`\n  AI Ecosystem Map v${VERSION}`);
+  console.log(`\n  Harness Control Plane v${VERSION}`);
 
   if (!hasClaudeDir) {
     console.log(`  No AI tooling detected yet — starting with empty dashboard.`);

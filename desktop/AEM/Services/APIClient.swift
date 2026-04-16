@@ -26,7 +26,7 @@ final class APIClient: @unchecked Sendable {
     private func get<T: Decodable>(_ path: String, params: [String: String] = [:]) async throws -> T {
         let url = makeURL(path, params: params)
         var request = URLRequest(url: url)
-        request.setValue("macos", forHTTPHeaderField: "X-AEM-Client")
+        request.setValue("macos", forHTTPHeaderField: "X-HCP-Client")
         let (data, response) = try await session.data(for: request)
         try validateResponse(response, url: url)
         return try decode(data, url: url)
@@ -37,7 +37,7 @@ final class APIClient: @unchecked Sendable {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("macos", forHTTPHeaderField: "X-AEM-Client")
+        request.setValue("macos", forHTTPHeaderField: "X-HCP-Client")
         request.httpBody = try JSONEncoder().encode(body)
         let (data, response) = try await session.data(for: request)
         try validateResponse(response, url: url)
@@ -49,7 +49,7 @@ final class APIClient: @unchecked Sendable {
         var request = URLRequest(url: url)
         request.httpMethod = "PUT"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("macos", forHTTPHeaderField: "X-AEM-Client")
+        request.setValue("macos", forHTTPHeaderField: "X-HCP-Client")
         request.httpBody = try JSONEncoder().encode(body)
         let (data, response) = try await session.data(for: request)
         try validateResponse(response, url: url)
@@ -60,7 +60,7 @@ final class APIClient: @unchecked Sendable {
         let url = makeURL(path, params: params)
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
-        request.setValue("macos", forHTTPHeaderField: "X-AEM-Client")
+        request.setValue("macos", forHTTPHeaderField: "X-HCP-Client")
         let (data, response) = try await session.data(for: request)
         try validateResponse(response, url: url)
         return try decode(data, url: url)

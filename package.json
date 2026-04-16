@@ -1,11 +1,11 @@
 {
-  "name": "ai-ecosystem-map",
-  "version": "1.0.0",
-  "description": "Interactive visual map of your AI coding ecosystem: skills, agents, MCP servers, rules — auto-discovered from Claude, Codex, Gemini, Cursor, Windsurf, Copilot configs",
+  "name": "harness-control-plane",
+  "version": "0.1.0",
+  "description": "Interactive visual control plane for your AI coding harness: skills, agents, MCP servers, rules — auto-discovered from Claude, Codex, Gemini, Cursor, Windsurf, Copilot configs",
   "main": "bin/cli.js",
   "bin": {
-    "ai-ecosystem-map": "bin/cli.js",
-    "aem": "bin/cli.js"
+    "harness-control-plane": "bin/cli.js",
+    "hcp": "bin/cli.js"
   },
   "scripts": {
     "start": "node bin/cli.js",
@@ -42,7 +42,7 @@
   "license": "BSL-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/spyrae/ai-ecosystem-map"
+    "url": "https://github.com/spyrae/harness-control-plane"
   },
   "engines": {
     "node": ">=18.0.0"
