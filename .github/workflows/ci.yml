@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: [18, 20, 22]
+        node-version: [20, 22]
 
     steps:
       - uses: actions/checkout@v4
@@ -40,4 +40,4 @@ jobs:
       - run: npm ci
       - run: cd ui && npm ci
       - name: TypeScript check
-        run: cd ui && npx tsc --noEmit
+        run: cd ui && npx tsc -b
