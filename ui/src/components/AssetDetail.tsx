@@ -1,11 +1,8 @@
 import { useEffect, useState } from 'react';
 import {
   CAPABILITY_STATE_LABELS,
-  DRIFT_STATUS_LABELS,
-  assetCanConnect,
   assetCanDelete,
   assetCanEdit,
-  assetCanInspectMcpTools,
   capabilitySummaryItems,
   type Asset,
   type DriftGroup,
@@ -13,8 +10,7 @@ import {
   type RemediationSuggestion,
   type TopologyGraph,
 } from '../types';
-import { applyAssetRemediation, connectAsset, fetchAssetContent, fetchAssetRemediations, updateAssetContent, deleteAsset, fetchMcpConfig, runMcpRuntimeCheck } from '../lib/api';
-import { getAssetTopology } from '../lib/topology';
+import { connectAsset, fetchAssetContent, fetchAssetRemediations, updateAssetContent, deleteAsset, fetchMcpConfig } from '../lib/api';
 import { ProviderBadge } from './ProviderBadge';
 
 const TYPE_STYLES: Record<string, string> = {
@@ -34,12 +30,6 @@ const CAPABILITY_STYLES: Record<string, string> = {
   invalid: 'border-red/30 bg-red/10 text-red',
 };
 
-const RUNTIME_STYLES: Record<string, string> = {
-  ok: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
-  warning: 'border-amber-500/30 bg-amber-500/10 text-amber-300',
-  broken: 'border-red/30 bg-red/10 text-red',
-  unknown: 'border-border bg-[hsl(240,4%,13%)] text-muted',
-};
 
 interface AssetDetailProps {
   asset: Asset;
@@ -57,22 +47,24 @@ interface AssetDetailProps {
 
 export function AssetDetail({
   asset,
-  topology,
-  driftGroup,
+  topology: _topology,
+  driftGroup: _driftGroup,
   onClose,
   onDeleted,
-  onConnect,
+  onConnect: _onConnect,
   onUpdated,
-  onMakeSourceOfTruth,
-  onOpenProject,
-  onOpenServer,
+  onMakeSourceOfTruth: _onMakeSourceOfTruth,
+  onOpenProject: _onOpenProject,
+  onOpenServer: _onOpenServer,
   readOnly = false,
 }: AssetDetailProps) {
+  /* Reserved for future use
   const buildApproval = (note?: string | null) => ({
     confirmed: true,
     note: note ?? null,
     source: 'web',
   });
+  */
   const [content, setContent] = useState<string | null>(null);
   const [filePath, setFilePath] = useState('');
   const [loading, setLoading] = useState(true);
@@ -82,20 +74,17 @@ export function AssetDetail({
   const [toast, setToast] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [mcpConfig, setMcpConfig] = useState<Record<string, unknown> | null>(null);
-  const [mcpRuntime, setMcpRuntime] = useState<McpRuntimeCheck | null>(asset.runtime ?? null);
-  const [loadingRuntime, setLoadingRuntime] = useState(false);
+  const [_mcpRuntime, setMcpRuntime] = useState<McpRuntimeCheck | null>(asset.runtime ?? null);
+  const [_loadingRuntime, _setLoadingRuntime] = useState(false);
   const [connectingProvider, setConnectingProvider] = useState<string | null>(null);
-  const [runtimeError, setRuntimeError] = useState<string | null>(null);
-  const [remediations, setRemediations] = useState<RemediationSuggestion[]>([]);
-  const [loadingRemediations, setLoadingRemediations] = useState(false);
-  const [applyingRemediationId, setApplyingRemediationId] = useState<string | null>(null);
+  const [_runtimeError, setRuntimeError] = useState<string | null>(null);
+  const [_remediations, setRemediations] = useState<RemediationSuggestion[]>([]);
+  const [_loadingRemediations, setLoadingRemediations] = useState(false);
+  const [_applyingRemediationId, _setApplyingRemediationId] = useState<string | null>(null);
   const canEdit = assetCanEdit(asset);
   const canDelete = assetCanDelete(asset);
-  const canConnect = assetCanConnect(asset);
-  const canInspectTools = assetCanInspectMcpTools(asset);
   const readOnlyMessage = 'Global read-only audit mode is enabled.';
   const capabilityItems = capabilitySummaryItems(asset.capabilities);
-  const topologyInfo = getAssetTopology(topology, asset.id);
   const dependency = asset.dependency;
 
   useEffect(() => {
@@ -161,51 +150,6 @@ export function AssetDetail({
       if (res.ok) { onDeleted(); onClose(); }
       else showToast('Error: ' + (res.error || 'Delete failed'));
     } catch { showToast('Delete failed'); }
-  };
-
-  const handleRunRuntimeCheck = async () => {
-    setLoadingRuntime(true);
-    setRuntimeError(null);
-    try {
-      const res = await runMcpRuntimeCheck(asset.id, { force: true });
-      if (!res.ok || !res.data) {
-        setRuntimeError('Runtime check failed');
-        return;
-      }
-      setMcpRuntime(res.data);
-      await onUpdated?.();
-    } catch (err) {
-      setRuntimeError(err instanceof Error ? err.message : 'Runtime check failed');
-    } finally {
-      setLoadingRuntime(false);
-    }
-  };
-
-  const handleApplyRemediation = async (suggestion: RemediationSuggestion) => {
-    if (!suggestion.canApply || readOnly) return;
-    if (suggestion.risky && !window.confirm(`${suggestion.title}\n\n${suggestion.summary}\n\nThis remediation will overwrite current content. Continue?`)) {
-      return;
-    }
-    setApplyingRemediationId(suggestion.id);
-    try {
-      const res = await applyAssetRemediation(asset.id, suggestion.id, {
-        type: asset.type,
-        confirmRisk: suggestion.risky,
-        approval: buildApproval(suggestion.risky ? `Approved risky remediation for ${asset.name}` : `Approved remediation for ${asset.name}`),
-      });
-      if (!res.ok) {
-        showToast(`Error: ${res.error || 'Remediation failed'}`);
-        return;
-      }
-      showToast('Remediation applied');
-      await onUpdated?.();
-      const latest = await fetchAssetRemediations(asset.id, asset.type);
-      setRemediations(latest.data || []);
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Remediation failed');
-    } finally {
-      setApplyingRemediationId(null);
-    }
   };
 
   const typeStyle = TYPE_STYLES[asset.type] || TYPE_STYLES.skill;

@@ -15,7 +15,7 @@ function usePersistedState<T>(key: string, defaultValue: T): [T, React.Dispatch<
 import { DndContext, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import type { DragStartEvent, DragEndEvent } from '@dnd-kit/core';
 import { PROVIDER_LABELS, assetCanConnect, type Asset, type AssetHealthStatus, type AssetType, type AuditMode, type DependencyGraph, type DriftGraph, type DriftStatus, type HistoryEntry, type Provider, type Stats, type TopologyGraph } from './types';
-import { fetchAssets, fetchStats, fetchCategories, fetchHistory, fetchTopology, fetchDependencies, fetchDrift, fetchAuditMode, fetchAuditReport, setGlobalReadOnly, setSourceOfTruth, rollbackHistoryEntry, undoLastAction, rescan, connectAsset, validateBatch, connectBatch, disconnectBatch, deleteBatch } from './lib/api';
+import { fetchAssets, fetchStats, fetchCategories, fetchHistory, fetchTopology, fetchDependencies, fetchDrift, fetchAuditMode, setGlobalReadOnly, setSourceOfTruth, rollbackHistoryEntry, undoLastAction, rescan, connectAsset, validateBatch, connectBatch, disconnectBatch, deleteBatch } from './lib/api';
 import { buildUsedByMapFromTopology } from './lib/topology';
 import * as ws from './lib/ws';
 import { SearchBar, type SearchBarHandle } from './components/SearchBar';
@@ -231,26 +231,6 @@ export default function App() {
       showToast('Failed to update audit mode');
     }
   }, [globalReadOnly, showToast]);
-
-  const handleExportAuditReport = useCallback(async () => {
-    try {
-      const res = await fetchAuditReport();
-      const blob = new Blob([JSON.stringify(res.data, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      anchor.href = url;
-      anchor.download = `hcp-audit-report-${timestamp}.json`;
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      URL.revokeObjectURL(url);
-      showToast('Audit report downloaded');
-    } catch (err) {
-      console.error('Failed to export audit report:', err);
-      showToast('Failed to export audit report');
-    }
-  }, [showToast]);
 
   const handleRescan = useCallback(async () => {
     setRescanning(true);
